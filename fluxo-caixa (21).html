@@ -1,0 +1,2159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fluxo de caixa</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 10px; background: #f3f0e8; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  #root { width: 100%; max-width: 100%; margin: 0; }
+</style>
+</head>
+<body>
+<div id="root">Carregando...</div>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useRef, useCallback, useEffect } = React;
+const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+
+window.storage = {
+  get: async (key) => {
+    const v = localStorage.getItem(key);
+    return v === null ? null : { key, value: v, shared: false };
+  },
+  set: async (key, value) => {
+    localStorage.setItem(key, value);
+    return { key, value, shared: false };
+  },
+  delete: async (key) => {
+    localStorage.removeItem(key);
+    return { key, deleted: true, shared: false };
+  },
+  list: async (prefix) => {
+    const keys = Object.keys(localStorage).filter((k) => !prefix || k.startsWith(prefix));
+    return { keys, prefix, shared: false };
+  },
+};
+
+
+const CORE_HEADERS = [
+  "Data (vencimento)",
+  "Data da compra",
+  "Descrição",
+  "Valor",
+  "Cartão",
+  "Entrada ou Saída",
+  "Status pgto",
+  "Saldo",
+  "Fonte",
+  "Previsto",
+  "Natureza",
+  "Titularidade",
+];
+
+const STORAGE_KEY = "fluxo-caixa:transacoes";
+const LIMITES_KEY = "fluxo-caixa:limites";
+const PAGE_SIZE = 200;
+const SEM_CARTAO = "(sem cartão)";
+const SEM_FONTE = "(sem fonte)";
+
+const PALETTE = {
+  cream: "#fffcf2",
+  taupe: "#ccc5b9",
+  brown: "#403d39",
+  ink: "#252422",
+  accent: "#eb5e28",
+};
+const POSITIVE = "#2f6845";
+const NEGATIVE = "#a83a2b";
+
+function svgProps(size) {
+  return { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" };
+}
+function IconEdit({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z" />
+    </svg>
+  );
+}
+function IconTrash({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+function IconCheck({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+function IconX({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+function IconUpload({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
+    </svg>
+  );
+}
+function IconDownload({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+function IconPlus({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+function IconChevronDown({ size = 12 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+function IconCreditCard({ size = 14 }) {
+  return (
+    <svg {...svgProps(size)} aria-hidden="true">
+      <rect x="1" y="4" width="22" height="16" rx="2" />
+      <line x1="1" y1="10" x2="23" y2="10" />
+    </svg>
+  );
+}
+
+function excelSerialToDate(v) {
+  if (v instanceof Date) return v;
+  if (typeof v === "number") {
+    const utc = XLSX.SSF.parse_date_code(v);
+    if (!utc) return null;
+    return new Date(utc.y, utc.m - 1, utc.d, utc.H || 0, utc.M || 0, Math.floor(utc.S || 0));
+  }
+  return null;
+}
+
+function normalizePrevisto(raw) {
+  if (raw === null || raw === undefined || raw === "" || raw === 0 || raw === "0") return false;
+  if (typeof raw === "string" && ["não", "nao", "false", "n"].includes(raw.trim().toLowerCase())) return false;
+  return true;
+}
+
+function cartaoKey(nome) {
+  return (nome || "").trim().toLowerCase();
+}
+
+function effectiveNatureza(t, cartaoConfig) {
+  if (t.natureza) return t.natureza;
+  const cfg = cartaoConfig[cartaoKey(t.cartao) || SEM_CARTAO];
+  return cfg?.natureza || null;
+}
+
+function effectiveTitularidade(t) {
+  return t.titularidade === "terceiro" ? "terceiro" : "propria";
+}
+
+function isPago(statusPgto) {
+  return String(statusPgto || "").trim().toLowerCase() === "pago";
+}
+
+const NATUREZA_LABELS = { liquida: "Conta líquida", divida: "Dívida", restrito: "Saldo restrito" };
+const TITULARIDADE_LABELS = { propria: "Própria", terceiro: "Terceiro" };
+const NATUREZA_FROM_LABEL = Object.fromEntries(Object.entries(NATUREZA_LABELS).map(([k, v]) => [v.toLowerCase(), k]));
+
+function formatBRL(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function formatDate(d) {
+  if (!d) return "—";
+  return d.toLocaleDateString("pt-BR");
+}
+
+function formatTime(d) {
+  if (!d) return "";
+  return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function toInputDate(d) {
+  if (!d) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function dayKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function monthKeyOf(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function findHeaderRow(rows) {
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const row = rows[i] || [];
+    if (row.some((c) => String(c).trim() === "Data") && row.some((c) => String(c).trim() === "Valor")) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function parseWorkbook(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+  const sheetName =
+    wb.SheetNames.find((n) => n.toLowerCase().includes("lançamento") || n.toLowerCase().includes("lancamento")) ||
+    wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  const headerIdx = findHeaderRow(rows);
+  if (headerIdx === -1) {
+    throw new Error("Não encontrei uma tabela com colunas Data e Valor nesta planilha.");
+  }
+  const headers = rows[headerIdx].map((h) => (h === null ? "" : String(h).trim()));
+  const idx = {};
+  headers.forEach((h, i) => {
+    if (h) idx[h] = i;
+  });
+
+  const out = [];
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const descricao = idx["Descrição"] !== undefined ? row[idx["Descrição"]] : null;
+    const valor = idx["Valor"] !== undefined ? row[idx["Valor"]] : null;
+    if (descricao === null && valor === null) continue;
+    const rawDate = idx["Data"] !== undefined ? row[idx["Data"]] : null;
+    const date = excelSerialToDate(rawDate);
+    const dataIso = date ? date.toISOString() : null;
+    out.push({
+      id: `imp-${r}`,
+      data: dataIso,
+      dataCompra: dataIso,
+      descricao: descricao !== null ? String(descricao) : "",
+      valor: typeof valor === "number" ? valor : parseFloat(valor) || 0,
+      cartao: idx["Cartão"] !== undefined ? row[idx["Cartão"]] || "" : "",
+      entradaSaida: idx["Entrada ou Saída"] !== undefined ? row[idx["Entrada ou Saída"]] || "" : "",
+      statusPgto: idx["Status pgto"] !== undefined ? row[idx["Status pgto"]] || "" : "",
+      fonte: idx["Fonte"] !== undefined ? row[idx["Fonte"]] || "" : "",
+      previsto: normalizePrevisto(idx["Previsto"] !== undefined ? row[idx["Previsto"]] : null),
+      origem: "importado",
+      grupoId: null,
+      natureza: (() => {
+        const raw = idx["Natureza"] !== undefined ? row[idx["Natureza"]] : null;
+        if (!raw) return null;
+        return NATUREZA_FROM_LABEL[String(raw).trim().toLowerCase()] || null;
+      })(),
+      titularidade: (() => {
+        const raw = idx["Titularidade"] !== undefined ? row[idx["Titularidade"]] : null;
+        return raw && String(raw).trim().toLowerCase() === "terceiro" ? "terceiro" : "propria";
+      })(),
+    });
+  }
+  return { transactions: out, sheetName };
+}
+
+function buildExportWorkbook(transactions, cartaoConfig) {
+  const sorted = [...transactions].sort((a, b) => {
+    const da = a.data ? new Date(a.data).getTime() : 0;
+    const db = b.data ? new Date(b.data).getTime() : 0;
+    return da - db;
+  });
+  const data = [
+    CORE_HEADERS,
+    ...sorted.map((t) => {
+      const nat = effectiveNatureza(t, cartaoConfig);
+      return [
+        t.data ? new Date(t.data) : null,
+        t.dataCompra ? new Date(t.dataCompra) : null,
+        t.descricao,
+        t.valor,
+        t.cartao,
+        t.entradaSaida || (t.valor < 0 ? "S" : "E"),
+        t.statusPgto,
+        t.saldoCalc ?? "",
+        t.fonte,
+        t.previsto ? "Sim" : "Não",
+        nat ? NATUREZA_LABELS[nat] || nat : "",
+        TITULARIDADE_LABELS[effectiveTitularidade(t)],
+      ];
+    }),
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws["!cols"] = [
+    { wch: 12 }, { wch: 12 }, { wch: 34 }, { wch: 12 }, { wch: 16 },
+    { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 8 }, { wch: 14 }, { wch: 12 },
+  ];
+  for (let r = 1; r < data.length; r++) {
+    [0, 1].forEach((c) => {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      if (ws[ref]) ws[ref].z = "dd/mm/yyyy";
+    });
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Lançamentos");
+  return wb;
+}
+
+function downloadWorkbook(wb, filename) {
+  const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  const blob = new Blob([wbout], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+const inputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "8px 10px",
+  fontSize: "14px",
+  fontFamily: "inherit",
+  background: PALETTE.cream,
+  border: `1px solid ${PALETTE.taupe}`,
+  borderRadius: "3px",
+  color: PALETTE.ink,
+};
+
+const smallInputStyle = { ...inputStyle, padding: "4px 8px", fontSize: "13px" };
+const searchInputStyle = { ...inputStyle, padding: "4px 10px" };
+
+const labelStyle = {
+  display: "block",
+  fontSize: "12px",
+  color: PALETTE.brown,
+  marginBottom: "4px",
+  fontFamily: "'IBM Plex Mono', monospace",
+  letterSpacing: "0.01em",
+};
+
+const NONE_SENTINEL = "__none__";
+
+function MultiSelectDropdown({ title, options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const allSelected = selected.size === 0;
+  const realSelected = new Set([...selected].filter((v) => v !== NONE_SENTINEL));
+
+  function toggleAll() {
+    onChange(allSelected ? new Set([NONE_SENTINEL]) : new Set());
+  }
+  function toggleOne(v) {
+    if (allSelected) {
+      const next = new Set(options.map((o) => o.value));
+      next.delete(v);
+      onChange(next);
+      return;
+    }
+    const next = new Set(realSelected);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    if (next.size === options.length) onChange(new Set());
+    else if (next.size === 0) onChange(new Set([NONE_SENTINEL]));
+    else onChange(next);
+  }
+  const isChecked = (v) => allSelected || realSelected.has(v);
+  const summary = allSelected
+    ? "todos"
+    : realSelected.size === 0
+    ? "nenhum"
+    : realSelected.size === 1
+    ? options.find((o) => realSelected.has(o.value))?.label
+    : `${realSelected.size} selecionados`;
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        type="button"
+        className="fc-btn"
+        onClick={() => setOpen((o) => !o)}
+        style={{ minWidth: "118px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "6px" }}
+      >
+        <span>
+          {title}: {summary}
+        </span>
+        <IconChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "110%",
+            left: 0,
+            zIndex: 20,
+            background: PALETTE.cream,
+            border: `1px solid ${PALETTE.taupe}`,
+            borderRadius: "4px",
+            padding: "8px",
+            minWidth: "170px",
+            maxHeight: "240px",
+            overflowY: "auto",
+            boxShadow: "0 4px 14px rgba(37,36,34,0.15)",
+          }}
+        >
+          <label
+            style={{
+              display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", padding: "4px 2px",
+              borderBottom: `1px solid ${PALETTE.taupe}`, marginBottom: "4px", cursor: "pointer", fontWeight: 500,
+            }}
+          >
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+            Selecionar tudo
+          </label>
+          {options.map((o) => (
+            <label key={o.value} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", padding: "3px 2px", cursor: "pointer" }}>
+              <input type="checkbox" checked={isChecked(o.value)} onChange={() => toggleOne(o.value)} />
+              {o.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SaldoTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div
+      style={{
+        background: PALETTE.cream, border: `1px solid ${PALETTE.taupe}`, borderRadius: "4px", padding: "8px 10px",
+        fontSize: "12px", fontFamily: "'IBM Plex Mono', monospace", boxShadow: "0 2px 8px rgba(37,36,34,0.15)",
+      }}
+    >
+      <div style={{ color: PALETTE.brown, marginBottom: "2px" }}>
+        {formatDate(p.dateObj)}
+        {p.showTime ? ` · ${formatTime(p.dateObj)}` : ""}
+      </div>
+      <div style={{ color: PALETTE.ink, fontWeight: 500 }}>{formatBRL(p.saldo)}</div>
+    </div>
+  );
+}
+
+function FluxoTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div
+      style={{
+        background: PALETTE.cream, border: `1px solid ${PALETTE.taupe}`, borderRadius: "4px", padding: "8px 10px",
+        fontSize: "12px", fontFamily: "'IBM Plex Mono', monospace", boxShadow: "0 2px 8px rgba(37,36,34,0.15)",
+      }}
+    >
+      <div style={{ color: PALETTE.brown, marginBottom: "4px" }}>
+        {formatDate(p.dateObj)}
+        {p.showTime ? ` · ${formatTime(p.dateObj)}` : ""}
+      </div>
+      {p.descricao && <div style={{ color: PALETTE.ink, marginBottom: "4px" }}>{p.descricao}</div>}
+      <div style={{ color: POSITIVE }}>entradas: {formatBRL(p.entradas)}</div>
+      <div style={{ color: NEGATIVE }}>saídas: {formatBRL(p.saidas)}</div>
+    </div>
+  );
+}
+
+const emptyForm = {
+  formTipo: "simples",
+  data: new Date().toISOString().slice(0, 10),
+  descricao: "",
+  valor: "",
+  tipo: "S",
+  cartao: "",
+  statusPgto: "Pago",
+  fonte: "",
+  previsto: false,
+  contaOrigem: "",
+  contaDestino: "",
+  parcelado: false,
+  parcelas: "2",
+  dataCompra: "",
+  subtipoEmprestimo: "ativo",
+  valorLiquido: "",
+  dataLiquido: "",
+  natureza: "",
+  titularidade: "propria",
+  frequencia: "mensal",
+  repeticoes: "12",
+};
+
+function FluxoCaixa() {
+  const [transactions, setTransactions] = useState([]);
+  const [sheetName, setSheetName] = useState(null);
+  const [status, setStatus] = useState({ type: "idle", message: "" });
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [showCartoes, setShowCartoes] = useState(false);
+  const [limites, setLimites] = useState({});
+  const [form, setForm] = useState(emptyForm);
+  const [formError, setFormError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [defaultsSet, setDefaultsSet] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [dateFromDraft, setDateFromDraft] = useState("");
+  const [dateToDraft, setDateToDraft] = useState("");
+  const [dateError, setDateError] = useState("");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [editingId, setEditingId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkField, setBulkField] = useState("natureza");
+  const [bulkValue, setBulkValue] = useState("");
+  const [bulkDateMode, setBulkDateMode] = useState("exata");
+  const [bulkConfirming, setBulkConfirming] = useState(false);
+  const [bulkDeleteConfirming, setBulkDeleteConfirming] = useState(false);
+  const [editDraft, setEditDraft] = useState(null);
+  const [editError, setEditError] = useState("");
+  const [chartView, setChartView] = useState("saldo");
+  const [filtroStatus, setFiltroStatus] = useState(new Set());
+  const [filtroFonte, setFiltroFonte] = useState(new Set());
+  const [filtroPrevisto, setFiltroPrevisto] = useState(new Set());
+  const [filtroTitularidade, setFiltroTitularidade] = useState(new Set());
+  const [filtroNatureza, setFiltroNatureza] = useState(new Set());
+  const [filtroCartao, setFiltroCartao] = useState(new Set());
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get(STORAGE_KEY, false);
+        if (res && res.value) {
+          const parsed = JSON.parse(res.value);
+          setTransactions(parsed.transactions || []);
+          setSheetName(parsed.sheetName || null);
+        }
+      } catch (e) {}
+      try {
+        const resL = await window.storage.get(LIMITES_KEY, false);
+        if (resL && resL.value) {
+          const parsed = JSON.parse(resL.value);
+          const migrated = {};
+          Object.entries(parsed).forEach(([k, v]) => {
+            const key = cartaoKey(k) || k;
+            const prev = migrated[key];
+            const novo =
+              typeof v === "number"
+                ? { creditoTotal: v, natureza: null, saldoInicial: 0, dataCorte: "" }
+                : {
+                    creditoTotal: v?.creditoTotal || 0,
+                    natureza: v?.natureza || null,
+                    saldoInicial: v?.saldoInicial || 0,
+                    dataCorte: v?.dataCorte || "",
+                  };
+            // se duas chaves antigas colidirem após normalizar, prioriza a que já tem natureza definida
+            migrated[key] = prev && prev.natureza && !novo.natureza ? prev : novo;
+          });
+          setLimites(migrated);
+        }
+      } catch (e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  const persist = useCallback(
+    async (list, sheet) => {
+      try {
+        await window.storage.set(STORAGE_KEY, JSON.stringify({ transactions: list, sheetName: sheet ?? sheetName }), false);
+      } catch (e) {}
+    },
+    [sheetName]
+  );
+
+  const persistLimites = useCallback(async (obj) => {
+    try {
+      await window.storage.set(LIMITES_KEY, JSON.stringify(obj), false);
+    } catch (e) {}
+  }, []);
+
+  const ledger = useMemo(() => {
+    const sorted = [...transactions].sort((a, b) => {
+      const da = a.data ? new Date(a.data).getTime() : 0;
+      const db = b.data ? new Date(b.data).getTime() : 0;
+      return da - db;
+    });
+    let running = 0;
+    const porCartao = {};
+    const porCartaoNatureza = {};
+    return sorted.map((t) => {
+      running += t.valor;
+      const cartaoNorm = cartaoKey(t.cartao) || SEM_CARTAO;
+      const chave = cartaoNorm;
+      const nat = effectiveNatureza(t, limites);
+      if (nat === "liquida" || nat === "restrito") {
+        porCartao[chave] = (porCartao[chave] || 0) + t.valor;
+        porCartaoNatureza[chave] = nat;
+      }
+      const dateObj = t.data ? new Date(t.data) : null;
+      return { ...t, saldoCalc: running, porCartaoCalc: { ...porCartao }, porCartaoNaturezaCalc: { ...porCartaoNatureza }, dateObj, cartaoNorm };
+    });
+  }, [transactions, limites]);
+
+  const cartaoDisplayNames = useMemo(() => {
+    const map = {};
+    ledger.forEach((t) => {
+      if (!t.cartao) return;
+      const k = cartaoKey(t.cartao);
+      if (!map[k]) map[k] = t.cartao.trim();
+    });
+    return map;
+  }, [ledger]);
+
+  const earliestDate = useMemo(() => {
+    const withDate = ledger.filter((t) => t.dateObj);
+    return withDate.length > 0 ? withDate[0].dateObj : null;
+  }, [ledger]);
+
+  useEffect(() => {
+    if (ledger.length > 0 && !defaultsSet) {
+      const hoje = new Date();
+      const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+      const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+      const from = toInputDate(inicioMes);
+      const to = toInputDate(fimMes);
+      setDateFrom(from);
+      setDateTo(to);
+      setDateFromDraft(from);
+      setDateToDraft(to);
+      setDefaultsSet(true);
+    }
+  }, [ledger, defaultsSet]);
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+    setSelectedIds(new Set());
+  }, [dateFrom, dateTo, search, filtroStatus, filtroFonte, filtroPrevisto, filtroCartao, filtroTitularidade, filtroNatureza]);
+
+  const handleFile = useCallback(
+    async (file) => {
+      setStatus({ type: "loading", message: "Lendo planilha..." });
+      try {
+        const buf = await file.arrayBuffer();
+        const { transactions: imported, sheetName: sn } = parseWorkbook(buf);
+        setTransactions(imported);
+        setSheetName(sn);
+        setDefaultsSet(false);
+        await persist(imported, sn);
+        setStatus({ type: "success", message: `${imported.length} lançamentos importados da aba "${sn}".` });
+      } catch (e) {
+        setStatus({ type: "error", message: e.message || "Não consegui ler esse arquivo." });
+      }
+    },
+    [persist]
+  );
+
+  function applyDateFilter() {
+    if (!dateFromDraft || !dateToDraft) {
+      setDateError("Informe as duas datas.");
+      return;
+    }
+    const from = new Date(dateFromDraft + "T00:00:00");
+    const to = new Date(dateToDraft + "T23:59:59");
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+      setDateError("Data inválida.");
+      return;
+    }
+    const minYear = 1990;
+    const maxYear = new Date().getFullYear() + 5;
+    if (from.getFullYear() < minYear || to.getFullYear() < minYear || from.getFullYear() > maxYear || to.getFullYear() > maxYear) {
+      setDateError(`Use anos entre ${minYear} e ${maxYear}.`);
+      return;
+    }
+    if (from > to) {
+      setDateError("A data 'de' precisa ser antes da data 'até'.");
+      return;
+    }
+    setDateError("");
+    setDateFrom(dateFromDraft);
+    setDateTo(dateToDraft);
+  }
+
+  function handleDateKeyDown(e) {
+    if (e.key === "Enter") applyDateFilter();
+  }
+
+  const statusOptions = [
+    { value: "pago", label: "Pago" },
+    { value: "pendente", label: "Pendente" },
+  ];
+
+  const fonteOptions = useMemo(() => {
+    const s = new Set(ledger.map((t) => t.fonte || SEM_FONTE));
+    return Array.from(s).sort().map((v) => ({ value: v, label: v }));
+  }, [ledger]);
+
+  const previstoOptions = [
+    { value: "sim", label: "Sim" },
+    { value: "nao", label: "Não" },
+  ];
+
+  const titularidadeOptions = [
+    { value: "propria", label: "Própria" },
+    { value: "terceiro", label: "Terceiro" },
+  ];
+
+  const naturezaOptions = [
+    { value: "liquida", label: "Conta líquida" },
+    { value: "divida", label: "Dívida" },
+    { value: "restrito", label: "Saldo restrito" },
+    { value: "nenhuma", label: "Não classificado" },
+  ];
+
+  const cartaoOptions = useMemo(() => {
+    const s = new Set(ledger.map((t) => t.cartaoNorm));
+    return Array.from(s).sort().map((k) => ({ value: k, label: k === SEM_CARTAO ? SEM_CARTAO : cartaoDisplayNames[k] || k }));
+  }, [ledger, cartaoDisplayNames]);
+
+  const periodFiltered = useMemo(() => {
+    const from = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
+    const to = dateTo ? new Date(dateTo + "T23:59:59") : null;
+    return ledger.filter((t) => {
+      if (!t.dateObj) return false;
+      if (from && t.dateObj < from) return false;
+      if (to && t.dateObj > to) return false;
+      if (filtroStatus.size > 0 && !filtroStatus.has(isPago(t.statusPgto) ? "pago" : "pendente")) return false;
+      if (filtroFonte.size > 0 && !filtroFonte.has(t.fonte || SEM_FONTE)) return false;
+      if (filtroPrevisto.size > 0 && !filtroPrevisto.has(t.previsto ? "sim" : "nao")) return false;
+      if (filtroCartao.size > 0 && !filtroCartao.has(t.cartaoNorm)) return false;
+      if (filtroTitularidade.size > 0 && !filtroTitularidade.has(effectiveTitularidade(t))) return false;
+      if (filtroNatureza.size > 0 && !filtroNatureza.has(effectiveNatureza(t, limites) || "nenhuma")) return false;
+      return true;
+    });
+  }, [ledger, dateFrom, dateTo, filtroStatus, filtroFonte, filtroPrevisto, filtroCartao, filtroTitularidade, filtroNatureza]);
+
+  const tableRows = useMemo(() => {
+    return periodFiltered
+      .filter((t) => (search.trim() === "" ? true : t.descricao.toLowerCase().includes(search.trim().toLowerCase())))
+      .slice()
+      .sort((a, b) => (a.dateObj?.getTime() || 0) - (b.dateObj?.getTime() || 0));
+  }, [periodFiltered, search]);
+
+  const visibleRows = useMemo(() => tableRows.slice(0, visibleCount), [tableRows, visibleCount]);
+
+  const summary = useMemo(() => {
+    let entradas = 0;
+    let saidas = 0;
+    periodFiltered.forEach((t) => {
+      if (t.valor >= 0) entradas += t.valor;
+      else saidas += Math.abs(t.valor);
+    });
+    const ordered = [...periodFiltered].sort((a, b) => (a.dateObj?.getTime() || 0) - (b.dateObj?.getTime() || 0));
+    const saldoInicial = ordered.length > 0 ? ordered[0].saldoCalc - ordered[0].valor : null;
+    const saldoFinal = ordered.length > 0 ? ordered[ordered.length - 1].saldoCalc : null;
+    return { entradas, saidas, liquido: entradas - saidas, saldoInicial, saldoFinal };
+  }, [periodFiltered]);
+
+  const nomesComNatureza = useMemo(() => {
+    const divida = new Set();
+    const liquida = new Set();
+    const restrito = new Set();
+    ledger.forEach((t) => {
+      if (t.cartaoNorm === SEM_CARTAO) return;
+      const nat = effectiveNatureza(t, limites);
+      if (nat === "divida") divida.add(t.cartaoNorm);
+      else if (nat === "liquida") liquida.add(t.cartaoNorm);
+      else if (nat === "restrito") restrito.add(t.cartaoNorm);
+    });
+    return { divida, liquida, restrito };
+  }, [ledger, limites]);
+
+  const creditoPorCartao = useMemo(() => {
+    const mesAtual = monthKeyOf(new Date());
+    const nomes = Array.from(nomesComNatureza.divida).sort();
+    return nomes.map((nome) => {
+      const doCartao = ledger.filter((t) => t.cartaoNorm === nome && effectiveNatureza(t, limites) === "divida");
+      const naoPrevistoNaoPago = doCartao.filter((t) => !t.previsto && !isPago(t.statusPgto));
+      const utilizado = -naoPrevistoNaoPago.reduce((acc, t) => acc + t.valor, 0);
+      const utilizadoPropria = -naoPrevistoNaoPago.filter((t) => effectiveTitularidade(t) === "propria").reduce((acc, t) => acc + t.valor, 0);
+      const utilizadoTerceiro = -naoPrevistoNaoPago.filter((t) => effectiveTitularidade(t) === "terceiro").reduce((acc, t) => acc + t.valor, 0);
+      const doMes = doCartao.filter((t) => !t.previsto && t.dateObj && monthKeyOf(t.dateObj) === mesAtual);
+      const utilizadoMes = -doMes.reduce((acc, t) => acc + t.valor, 0);
+      const utilizadoMesPropria = -doMes.filter((t) => effectiveTitularidade(t) === "propria").reduce((acc, t) => acc + t.valor, 0);
+      const utilizadoMesTerceiro = -doMes.filter((t) => effectiveTitularidade(t) === "terceiro").reduce((acc, t) => acc + t.valor, 0);
+      const creditoTotal = limites[nome]?.creditoTotal || 0;
+      return {
+        nome, creditoTotal, utilizado, utilizadoPropria, utilizadoTerceiro,
+        utilizadoMes, utilizadoMesPropria, utilizadoMesTerceiro,
+        disponivel: creditoTotal - utilizado,
+      };
+    });
+  }, [ledger, limites, nomesComNatureza]);
+
+  const contasLiquidas = useMemo(() => {
+    const nomes = Array.from(nomesComNatureza.liquida).sort();
+    return nomes.map((nome) => {
+      const corte = limites[nome]?.dataCorte ? new Date(limites[nome].dataCorte + "T23:59:59") : null;
+      const soma = ledger
+        .filter((t) => t.cartaoNorm === nome && effectiveNatureza(t, limites) === "liquida" && isPago(t.statusPgto) && (!corte || (t.dateObj && t.dateObj > corte)))
+        .reduce((acc, t) => acc + t.valor, 0);
+      return { nome, saldo: (limites[nome]?.saldoInicial || 0) + soma };
+    }).sort((a, b) => b.saldo - a.saldo);
+  }, [ledger, limites, nomesComNatureza]);
+
+  const contasRestritas = useMemo(() => {
+    const nomes = Array.from(nomesComNatureza.restrito).sort();
+    return nomes.map((nome) => {
+      const corte = limites[nome]?.dataCorte ? new Date(limites[nome].dataCorte + "T23:59:59") : null;
+      const soma = ledger
+        .filter((t) => t.cartaoNorm === nome && effectiveNatureza(t, limites) === "restrito" && isPago(t.statusPgto) && (!corte || (t.dateObj && t.dateObj > corte)))
+        .reduce((acc, t) => acc + t.valor, 0);
+      return { nome, saldo: (limites[nome]?.saldoInicial || 0) + soma };
+    }).sort((a, b) => b.saldo - a.saldo);
+  }, [ledger, limites, nomesComNatureza]);
+
+  const totalLiquido = contasLiquidas.reduce((acc, c) => acc + c.saldo, 0);
+  const totalRestrito = contasRestritas.reduce((acc, c) => acc + c.saldo, 0);
+
+  const todosCartaoNomes = useMemo(() => {
+    return Array.from(new Set(ledger.map((t) => t.cartaoNorm).filter((k) => k && k !== SEM_CARTAO))).sort();
+  }, [ledger]);
+
+  const cartoesNaoClassificados = useMemo(() => {
+    return todosCartaoNomes.filter((nome) => !limites[nome]?.natureza);
+  }, [todosCartaoNomes, limites]);
+
+  const isSingleDay = Boolean(dateFrom && dateTo && dateFrom === dateTo);
+
+  const chartData = useMemo(() => {
+    const sorted = [...periodFiltered].sort((a, b) => (a.dateObj?.getTime() || 0) - (b.dateObj?.getTime() || 0));
+    if (isSingleDay) {
+      return sorted.map((t) => ({ key: t.id, dateObj: t.dateObj, saldo: t.saldoCalc, showTime: true }));
+    }
+    const byDay = new Map();
+    sorted.forEach((t) => {
+      const key = dayKey(t.dateObj);
+      byDay.set(key, { key, dateObj: t.dateObj, saldo: t.saldoCalc, showTime: false });
+    });
+    return Array.from(byDay.values());
+  }, [periodFiltered, isSingleDay]);
+
+  const fluxoChartData = useMemo(() => {
+    const sorted = [...periodFiltered].sort((a, b) => (a.dateObj?.getTime() || 0) - (b.dateObj?.getTime() || 0));
+    if (isSingleDay) {
+      return sorted.map((t) => ({
+        key: t.id, dateObj: t.dateObj, descricao: t.descricao, showTime: true,
+        entradas: t.valor >= 0 ? t.valor : 0, saidas: t.valor < 0 ? -t.valor : 0,
+      }));
+    }
+    const byDay = new Map();
+    sorted.forEach((t) => {
+      const key = dayKey(t.dateObj);
+      const cur = byDay.get(key) || { key, dateObj: t.dateObj, entradas: 0, saidas: 0, showTime: false };
+      if (t.valor >= 0) cur.entradas += t.valor;
+      else cur.saidas += -t.valor;
+      byDay.set(key, cur);
+    });
+    return Array.from(byDay.values());
+  }, [periodFiltered, isSingleDay]);
+
+  const activeChartData = chartView === "saldo" ? chartData : fluxoChartData;
+
+  const tickInterval = useMemo(() => {
+    const target = 14;
+    if (activeChartData.length <= target) return 0;
+    return Math.ceil(activeChartData.length / target) - 1;
+  }, [activeChartData]);
+
+  const cartoesConhecidos = useMemo(() => {
+    const s = new Set(transactions.map((t) => t.cartao).filter(Boolean));
+    return Array.from(s).sort();
+  }, [transactions]);
+
+  function expandRangeTo(dates) {
+    if (dates.length === 0) return;
+    const min = dates.reduce((a, b) => (a < b ? a : b));
+    const max = dates.reduce((a, b) => (a > b ? a : b));
+    setDateFrom((prev) => {
+      const prevDate = prev ? new Date(prev + "T00:00:00") : null;
+      const next = !prevDate || min < prevDate ? toInputDate(min) : prev;
+      setDateFromDraft(next);
+      return next;
+    });
+    setDateTo((prev) => {
+      const prevDate = prev ? new Date(prev + "T23:59:59") : null;
+      const next = !prevDate || max > prevDate ? toInputDate(max) : prev;
+      setDateToDraft(next);
+      return next;
+    });
+  }
+
+  function validateForm() {
+    if (!form.data) return "Informe a data.";
+    if (form.formTipo === "simples") {
+      if (!form.descricao.trim()) return "Descreva o lançamento.";
+      if (form.valor === "" || isNaN(parseFloat(form.valor))) return "Informe um valor válido.";
+    }
+    if (form.formTipo === "transferencia") {
+      if (form.valor === "" || isNaN(parseFloat(form.valor)) || parseFloat(form.valor) <= 0) return "Informe um valor válido.";
+      if (!form.contaOrigem.trim() || !form.contaDestino.trim()) return "Informe a conta de origem e a de destino.";
+      if (form.contaOrigem.trim() === form.contaDestino.trim()) return "Origem e destino precisam ser contas diferentes.";
+    }
+    if (form.formTipo === "compra") {
+      if (!form.descricao.trim()) return "Descreva a compra.";
+      if (form.valor === "" || isNaN(parseFloat(form.valor)) || parseFloat(form.valor) <= 0) return "Informe um valor válido.";
+      if (!form.cartao.trim()) return "Informe o cartão usado.";
+      if (form.parcelado && (isNaN(parseInt(form.parcelas, 10)) || parseInt(form.parcelas, 10) < 2)) return "Informe um número de parcelas válido (mínimo 2).";
+    }
+    if (form.formTipo === "emprestimo") {
+      if (!form.descricao.trim()) return "Descreva o empréstimo.";
+      if (form.valorLiquido === "" || isNaN(parseFloat(form.valorLiquido)) || parseFloat(form.valorLiquido) <= 0) return "Informe o valor líquido.";
+      if (form.valor === "" || isNaN(parseFloat(form.valor)) || parseFloat(form.valor) <= 0) return "Informe o valor total (a ser recebido/pago em parcelas).";
+      if (!form.cartao.trim()) return "Informe o cartão/conta envolvido.";
+      if (!form.dataLiquido) return "Informe a data do líquido.";
+      if (isNaN(parseInt(form.parcelas, 10)) || parseInt(form.parcelas, 10) < 1) return "Informe um número de parcelas válido (mínimo 1).";
+    }
+    if (form.formTipo === "recorrente") {
+      if (!form.descricao.trim()) return "Descreva o lançamento recorrente.";
+      if (form.valor === "" || isNaN(parseFloat(form.valor)) || parseFloat(form.valor) <= 0) return "Informe um valor válido.";
+      if (isNaN(parseInt(form.repeticoes, 10)) || parseInt(form.repeticoes, 10) < 1) return "Informe quantas vezes deve se repetir (mínimo 1).";
+    }
+    return "";
+  }
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    const err = validateForm();
+    if (err) {
+      setFormError(err);
+      return;
+    }
+    setFormError("");
+    const hoje = new Date();
+    let novos = [];
+
+    if (form.formTipo === "simples") {
+      const magnitude = Math.abs(parseFloat(form.valor));
+      const signedValor = form.tipo === "S" ? -magnitude : magnitude;
+      const dataObj = new Date(form.data + "T12:00:00");
+      novos = [
+        {
+          id: `novo-${Date.now()}`,
+          data: dataObj.toISOString(),
+          dataCompra: dataObj.toISOString(),
+          descricao: form.descricao.trim(),
+          valor: signedValor,
+          cartao: form.cartao.trim(),
+          entradaSaida: form.tipo,
+          statusPgto: form.statusPgto,
+          fonte: form.fonte.trim(),
+          previsto: form.previsto,
+          origem: "novo",
+          grupoId: null,
+          natureza: form.natureza || null,
+          titularidade: form.titularidade || "propria",
+        },
+      ];
+    } else if (form.formTipo === "transferencia") {
+      const magnitude = Math.abs(parseFloat(form.valor));
+      const dataIso = new Date(form.data + "T12:00:00").toISOString();
+      const groupId = `transf-${Date.now()}`;
+      const desc = form.descricao.trim() || "Transferência entre contas";
+      novos = [
+        {
+          id: `${groupId}-saida`, data: dataIso, dataCompra: dataIso,
+          descricao: `${desc} (para ${form.contaDestino.trim()})`, valor: -magnitude, cartao: form.contaOrigem.trim(),
+          entradaSaida: "S", statusPgto: "Pago", fonte: "", previsto: false, origem: "novo", grupoId: groupId, natureza: "liquida",
+        },
+        {
+          id: `${groupId}-entrada`, data: dataIso, dataCompra: dataIso,
+          descricao: `${desc} (de ${form.contaOrigem.trim()})`, valor: magnitude, cartao: form.contaDestino.trim(),
+          entradaSaida: "E", statusPgto: "Pago", fonte: "", previsto: false, origem: "novo", grupoId: groupId, natureza: "liquida",
+        },
+      ];
+    } else if (form.formTipo === "compra") {
+      const total = Math.abs(parseFloat(form.valor));
+      const parcelas = form.parcelado ? Math.max(2, parseInt(form.parcelas, 10)) : 1;
+      const valorParcela = Math.round((total / parcelas) * 100) / 100;
+      const somaAnteriores = valorParcela * (parcelas - 1);
+      const ultimaParcela = Math.round((total - somaAnteriores) * 100) / 100;
+      const baseDate = new Date(form.data + "T12:00:00");
+      const dataCompraIso = (form.dataCompra ? new Date(form.dataCompra + "T12:00:00") : baseDate).toISOString();
+      const groupId = `compra-${Date.now()}`;
+      novos = Array.from({ length: parcelas }, (_, i) => {
+        const d = new Date(baseDate);
+        d.setMonth(d.getMonth() + i);
+        const valorItem = i === parcelas - 1 ? ultimaParcela : valorParcela;
+        return {
+          id: `${groupId}-${i}`,
+          data: d.toISOString(),
+          dataCompra: dataCompraIso,
+          descricao: parcelas > 1 ? `${form.descricao.trim()} (parcela ${i + 1}/${parcelas})` : form.descricao.trim(),
+          valor: -Math.abs(valorItem),
+          cartao: form.cartao.trim(),
+          entradaSaida: "S",
+          statusPgto: d <= hoje ? "Pago" : "-",
+          fonte: "",
+          previsto: false,
+          origem: "novo",
+          grupoId: groupId,
+          natureza: "divida",
+          titularidade: form.titularidade || "propria",
+        };
+      });
+    } else if (form.formTipo === "emprestimo") {
+      const valorLiquido = Math.abs(parseFloat(form.valorLiquido));
+      const valorTotal = Math.abs(parseFloat(form.valor));
+      const parcelas = Math.max(1, parseInt(form.parcelas, 10) || 1);
+      const valorParcela = Math.round((valorTotal / parcelas) * 100) / 100;
+      const somaAnteriores = valorParcela * (parcelas - 1);
+      const ultimaParcela = Math.round((valorTotal - somaAnteriores) * 100) / 100;
+      const dataLiquidoObj = new Date(form.dataLiquido + "T12:00:00");
+      const baseVencimento = new Date(form.data + "T12:00:00");
+      const groupId = `emprestimo-${Date.now()}`;
+      const ativo = form.subtipoEmprestimo === "ativo";
+      const descBase = form.descricao.trim();
+
+      const liquidoLeg = {
+        id: `${groupId}-liquido`,
+        data: dataLiquidoObj.toISOString(),
+        dataCompra: dataLiquidoObj.toISOString(),
+        descricao: `${descBase} (líquido)`,
+        valor: ativo ? -valorLiquido : valorLiquido,
+        cartao: form.cartao.trim(),
+        entradaSaida: ativo ? "S" : "E",
+        statusPgto: dataLiquidoObj <= hoje ? "Pago" : "-",
+        fonte: form.fonte.trim(),
+        previsto: false,
+        origem: "novo",
+        grupoId: groupId,
+        natureza: "liquida",
+      };
+
+      const parcelasLegs = Array.from({ length: parcelas }, (_, i) => {
+        const d = new Date(baseVencimento);
+        d.setMonth(d.getMonth() + i);
+        const valorItem = i === parcelas - 1 ? ultimaParcela : valorParcela;
+        return {
+          id: `${groupId}-p${i}`,
+          data: d.toISOString(),
+          dataCompra: dataLiquidoObj.toISOString(),
+          descricao: parcelas > 1 ? `${descBase} (parcela ${i + 1}/${parcelas})` : `${descBase} (parcela única)`,
+          valor: ativo ? valorItem : -valorItem,
+          cartao: form.cartao.trim(),
+          entradaSaida: ativo ? "E" : "S",
+          statusPgto: d <= hoje ? "Pago" : "-",
+          fonte: form.fonte.trim(),
+          previsto: false,
+          origem: "novo",
+          grupoId: groupId,
+          natureza: "liquida",
+        };
+      });
+
+      novos = [liquidoLeg, ...parcelasLegs];
+    } else if (form.formTipo === "recorrente") {
+      const magnitude = Math.abs(parseFloat(form.valor));
+      const signedValor = form.tipo === "S" ? -magnitude : magnitude;
+      const repeticoes = Math.max(1, parseInt(form.repeticoes, 10) || 1);
+      const baseDate = new Date(form.data + "T12:00:00");
+      const groupId = `recorrente-${Date.now()}`;
+      novos = Array.from({ length: repeticoes }, (_, i) => {
+        const d = new Date(baseDate);
+        if (form.frequencia === "quinzenal") d.setDate(d.getDate() + i * 15);
+        else d.setMonth(d.getMonth() + i);
+        return {
+          id: `${groupId}-${i}`,
+          data: d.toISOString(),
+          dataCompra: d.toISOString(),
+          descricao: form.descricao.trim(),
+          valor: signedValor,
+          cartao: form.cartao.trim(),
+          entradaSaida: form.tipo,
+          statusPgto: d <= hoje ? "Pago" : "-",
+          fonte: form.fonte.trim(),
+          previsto: false,
+          origem: "novo",
+          grupoId: groupId,
+          natureza: form.natureza || null,
+          titularidade: "propria",
+        };
+      });
+    }
+
+    const updated = [...transactions, ...novos];
+    setTransactions(updated);
+    await persist(updated);
+    expandRangeTo(novos.map((n) => new Date(n.data)));
+    setForm({ ...emptyForm, data: new Date().toISOString().slice(0, 10) });
+    setShowForm(false);
+  }
+
+  function startEdit(t) {
+    setEditingId(t.id);
+    setEditError("");
+    setEditDraft({
+      data: t.dateObj ? toInputDate(t.dateObj) : "",
+      dataCompra: t.dataCompra ? toInputDate(new Date(t.dataCompra)) : "",
+      descricao: t.descricao,
+      cartao: t.cartao,
+      statusPgto: t.statusPgto || "Pago",
+      fonte: t.fonte,
+      previsto: Boolean(t.previsto),
+      valor: String(t.valor),
+      natureza: t.natureza || "",
+      titularidade: effectiveTitularidade(t),
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft(null);
+    setEditError("");
+  }
+
+  async function saveEdit(id) {
+    const valorNum = parseFloat(editDraft.valor);
+    if (!editDraft.data || !editDraft.descricao.trim() || isNaN(valorNum)) {
+      setEditError("Confira data, descrição e valor.");
+      return;
+    }
+    const updated = transactions.map((t) =>
+      t.id === id
+        ? {
+            ...t,
+            data: new Date(editDraft.data + "T12:00:00").toISOString(),
+            dataCompra: editDraft.dataCompra ? new Date(editDraft.dataCompra + "T12:00:00").toISOString() : new Date(editDraft.data + "T12:00:00").toISOString(),
+            descricao: editDraft.descricao.trim(),
+            cartao: editDraft.cartao.trim(),
+            statusPgto: editDraft.statusPgto,
+            fonte: editDraft.fonte.trim(),
+            previsto: editDraft.previsto,
+            valor: valorNum,
+            entradaSaida: valorNum < 0 ? "S" : "E",
+            natureza: editDraft.natureza || null,
+            titularidade: editDraft.titularidade || "propria",
+          }
+        : t
+    );
+    setTransactions(updated);
+    await persist(updated);
+    setEditingId(null);
+    setEditDraft(null);
+    setEditError("");
+  }
+
+  function deleteTransaction(id) {
+    const updated = transactions.filter((t) => t.id !== id);
+    setTransactions(updated);
+    persist(updated);
+  }
+
+  function handleExportAll() {
+    const wb = buildExportWorkbook(ledger, limites);
+    downloadWorkbook(wb, "fluxo-caixa-completo.xlsx");
+  }
+
+  function handleExportNovos() {
+    const novos = ledger.filter((t) => t.origem === "novo");
+    if (novos.length === 0) {
+      setStatus({ type: "info", message: "Não há lançamentos novos para exportar ainda." });
+      return;
+    }
+    const wb = buildExportWorkbook(novos, limites);
+    downloadWorkbook(wb, "fluxo-caixa-novos-lancamentos.xlsx");
+  }
+
+  function updateCreditoTotal(nome, valor) {
+    const num = parseFloat(valor);
+    const atual = limites[nome] || { creditoTotal: 0, natureza: null, saldoInicial: 0, dataCorte: "" };
+    const next = { ...limites, [nome]: { ...atual, creditoTotal: isNaN(num) ? 0 : num } };
+    setLimites(next);
+    persistLimites(next);
+  }
+
+  function updateNatureza(nome, natureza) {
+    const atual = limites[nome] || { creditoTotal: 0, natureza: null, saldoInicial: 0, dataCorte: "" };
+    const next = { ...limites, [nome]: { ...atual, natureza: natureza || null } };
+    setLimites(next);
+    persistLimites(next);
+  }
+
+  function updateSaldoInicial(nome, valor) {
+    const num = parseFloat(valor);
+    const atual = limites[nome] || { creditoTotal: 0, natureza: null, saldoInicial: 0, dataCorte: "" };
+    const next = { ...limites, [nome]: { ...atual, saldoInicial: isNaN(num) ? 0 : num } };
+    setLimites(next);
+    persistLimites(next);
+  }
+
+  function updateDataCorte(nome, data) {
+    const atual = limites[nome] || { creditoTotal: 0, natureza: null, saldoInicial: 0, dataCorte: "" };
+    const next = { ...limites, [nome]: { ...atual, dataCorte: data } };
+    setLimites(next);
+    persistLimites(next);
+  }
+
+  function filtrarPorCartao(nome) {
+    setFiltroCartao(new Set([nome]));
+  }
+
+  function toggleSelectOne(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllFiltered() {
+    const allSelected = tableRows.length > 0 && tableRows.every((t) => selectedIds.has(t.id));
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(tableRows.map((t) => t.id)));
+    }
+  }
+
+  async function applyBulkEdit() {
+    const ids = selectedIds;
+    let updated = transactions;
+    if (bulkField === "natureza") {
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, natureza: bulkValue || null } : t));
+    } else if (bulkField === "titularidade") {
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, titularidade: bulkValue === "terceiro" ? "terceiro" : "propria" } : t));
+    } else if (bulkField === "status") {
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, statusPgto: bulkValue === "pago" ? "Pago" : "-" } : t));
+    } else if (bulkField === "fonte") {
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, fonte: bulkValue.trim() } : t));
+    } else if (bulkField === "previsto") {
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, previsto: bulkValue === "sim" } : t));
+    } else if (bulkField === "cartao") {
+      if (!bulkValue.trim()) return;
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, cartao: bulkValue.trim() } : t));
+    } else if (bulkField === "valor") {
+      const num = parseFloat(bulkValue);
+      if (isNaN(num)) return;
+      updated = transactions.map((t) => (ids.has(t.id) ? { ...t, valor: num, entradaSaida: num < 0 ? "S" : "E" } : t));
+    } else if (bulkField === "data_vencimento" || bulkField === "data_compra") {
+      const campo = bulkField === "data_vencimento" ? "data" : "dataCompra";
+      if (bulkDateMode === "exata") {
+        if (!bulkValue) return;
+        const novaData = new Date(bulkValue + "T12:00:00");
+        if (isNaN(novaData.getTime())) return;
+        updated = transactions.map((t) => (ids.has(t.id) ? { ...t, [campo]: novaData.toISOString() } : t));
+      } else {
+        const dias = parseInt(bulkValue, 10);
+        if (isNaN(dias)) return;
+        updated = transactions.map((t) => {
+          if (!ids.has(t.id) || !t[campo]) return t;
+          const d = new Date(t[campo]);
+          d.setDate(d.getDate() + dias);
+          return { ...t, [campo]: d.toISOString() };
+        });
+      }
+    }
+    setTransactions(updated);
+    await persist(updated);
+    setSelectedIds(new Set());
+    setBulkValue("");
+    setBulkConfirming(false);
+  }
+
+  async function applyBulkDelete() {
+    const updated = transactions.filter((t) => !selectedIds.has(t.id));
+    setTransactions(updated);
+    await persist(updated);
+    setSelectedIds(new Set());
+    setBulkDeleteConfirming(false);
+  }
+
+  if (!loaded) return null;
+
+  return (
+    <div style={{ fontFamily: "inherit", color: PALETTE.ink, maxWidth: "100%" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+        .fc-serif { font-family: 'Source Serif 4', Georgia, serif; }
+        .fc-mono { font-family: 'IBM Plex Mono', monospace; }
+        .fc-btn {
+          font-family: 'IBM Plex Mono', monospace; font-size: 12px; letter-spacing: 0.02em; padding: 7px 12px;
+          border: 1px solid ${PALETTE.ink}; background: transparent; color: ${PALETTE.ink}; border-radius: 3px;
+          cursor: pointer; display: inline-flex; align-items: center;
+        }
+        .fc-btn:hover { background: ${PALETTE.ink}; color: ${PALETTE.cream}; }
+        .fc-btn-accent { border-color: ${PALETTE.accent}; color: ${PALETTE.accent}; }
+        .fc-btn-accent:hover { background: ${PALETTE.accent}; color: ${PALETTE.cream}; }
+        .fc-btn-active { background: ${PALETTE.ink}; color: ${PALETTE.cream}; }
+        .fc-icon-btn {
+          border: none; background: none; cursor: pointer; color: ${PALETTE.brown};
+          padding: 4px; border-radius: 3px; display: inline-flex; align-items: center;
+        }
+        .fc-icon-btn:hover { background: ${PALETTE.taupe}55; color: ${PALETTE.ink}; }
+        .fc-icon-btn.danger:hover { color: ${NEGATIVE}; }
+        .fc-icon-btn.accent:hover { color: ${PALETTE.accent}; }
+        .fc-row:hover { background: ${PALETTE.taupe}44; }
+        .fc-muted-col { color: color-mix(in srgb, ${PALETTE.brown} 55%, ${PALETTE.cream} 45%); }
+        .fc-card-row:hover { background: ${PALETTE.taupe}44; cursor: pointer; }
+      `}</style>
+
+      <div style={{ background: PALETTE.cream, border: `1px solid ${PALETTE.taupe}`, borderRadius: "6px", padding: "1.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px", marginBottom: "1.25rem" }}>
+          <div>
+            <h1 className="fc-serif" style={{ fontSize: "22px", fontWeight: 600, margin: 0, color: PALETTE.ink }}>
+              Fluxo de caixa
+            </h1>
+            <p className="fc-mono" style={{ fontSize: "12px", color: PALETTE.brown, margin: "4px 0 0" }}>
+              {sheetName ? `origem: aba "${sheetName}"` : "nenhuma planilha importada ainda"}
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <button className="fc-btn" onClick={() => fileInputRef.current?.click()}>
+              <IconUpload size={14} />
+              <span style={{ marginLeft: "6px" }}>Importar .xlsx</span>
+            </button>
+            <input
+              ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }}
+            />
+            <button className="fc-btn fc-btn-accent" onClick={handleExportAll} disabled={transactions.length === 0}>
+              <IconDownload size={14} />
+              <span style={{ marginLeft: "6px" }}>Exportar tudo</span>
+            </button>
+            <button className="fc-btn" onClick={handleExportNovos}>Exportar só novos</button>
+          </div>
+        </div>
+
+        {status.message && (
+          <div
+            style={{
+              fontSize: "13px", padding: "8px 12px", borderRadius: "3px", marginBottom: "1rem",
+              background: status.type === "error" ? "#f6dcd8" : status.type === "success" ? "#dfe8d6" : PALETTE.taupe + "55",
+              color: status.type === "error" ? NEGATIVE : status.type === "success" ? POSITIVE : PALETTE.brown,
+            }}
+          >
+            {status.message}
+          </div>
+        )}
+
+        <datalist id="cartoes-conhecidos">
+          {cartoesConhecidos.map((c) => (<option key={c} value={c} />))}
+        </datalist>
+
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "1.5rem" }}>
+          <button className="fc-btn fc-btn-accent" onClick={() => setShowForm((v) => !v)}>
+            <IconPlus size={14} />
+            <span style={{ marginLeft: "6px" }}>Novo lançamento</span>
+          </button>
+          <button className="fc-btn" onClick={() => setShowCartoes((v) => !v)}>
+            <IconCreditCard size={14} />
+            <span style={{ marginLeft: "6px" }}>Cartões e limites</span>
+          </button>
+        </div>
+
+        {showCartoes && (
+          <div style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "1rem", marginBottom: "1.5rem" }}>
+            {todosCartaoNomes.length === 0 ? (
+              <p style={{ fontSize: "13px", color: PALETTE.brown, margin: 0 }}>Nenhum cartão/forma de pagamento encontrado ainda nos lançamentos.</p>
+            ) : (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px", marginBottom: "1rem" }}>
+                  <div style={{ background: PALETTE.cream, borderRadius: "4px", padding: "10px 12px" }}>
+                    <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>
+                      saldo líquido disponível (atual)
+                    </div>
+                    <div className="fc-mono" style={{ fontSize: "18px", fontWeight: 500, color: PALETTE.accent }}>{formatBRL(totalLiquido)}</div>
+                  </div>
+                  {contasRestritas.length > 0 && (
+                    <div style={{ background: PALETTE.cream, borderRadius: "4px", padding: "10px 12px" }}>
+                      <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>saldo restrito (fora do disponível)</div>
+                      <div className="fc-mono" style={{ fontSize: "18px", fontWeight: 500, color: PALETTE.brown }}>{formatBRL(totalRestrito)}</div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                    <thead>
+                      <tr className="fc-mono" style={{ color: PALETTE.brown, fontSize: "11px" }}>
+                        <th style={{ textAlign: "left", padding: "6px 8px" }}>cartão / conta</th>
+                        <th style={{ textAlign: "left", padding: "6px 8px" }}>natureza</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px" }}>crédito total</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px" }}>utilizado</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px" }}>utilizado no mês</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px" }}>disponível</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px" }}>saldo inicial</th>
+                        <th style={{ textAlign: "left", padding: "6px 8px" }}>a partir de</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px" }}>saldo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {todosCartaoNomes.map((nome) => {
+                        const cfg = limites[nome] || { creditoTotal: 0, natureza: null, saldoInicial: 0, dataCorte: "" };
+                        const nat = cfg.natureza;
+                        const divida = creditoPorCartao.find((c) => c.nome === nome);
+                        const liquidaEntry = contasLiquidas.find((c) => c.nome === nome) || contasRestritas.find((c) => c.nome === nome);
+                        const isDivida = Boolean(divida);
+                        const isSaldo = Boolean(liquidaEntry);
+                        return (
+                          <tr key={nome} className="fc-card-row" style={{ borderTop: `1px solid ${PALETTE.taupe}` }}>
+                            <td style={{ padding: "6px 8px" }} onClick={() => filtrarPorCartao(nome)}>{cartaoDisplayNames[nome] || nome}</td>
+                            <td style={{ padding: "4px 8px" }}>
+                              <select
+                                style={{ ...smallInputStyle, width: "140px" }}
+                                value={nat || ""}
+                                onChange={(e) => updateNatureza(nome, e.target.value)}
+                              >
+                                <option value="">Não classificado</option>
+                                <option value="liquida">Conta líquida</option>
+                                <option value="divida">Dívida</option>
+                                <option value="restrito">Saldo restrito</option>
+                              </select>
+                            </td>
+                            <td style={{ padding: "4px 8px", textAlign: "right" }}>
+                              <input
+                                type="number" step="0.01" style={{ ...smallInputStyle, textAlign: "right", width: "100px" }}
+                                value={cfg.creditoTotal || ""} placeholder="0,00"
+                                onChange={(e) => updateCreditoTotal(nome, e.target.value)}
+                              />
+                            </td>
+                            <td className="fc-mono" style={{ padding: "6px 8px", textAlign: "right", color: isDivida ? PALETTE.ink : PALETTE.brown }} onClick={() => filtrarPorCartao(nome)}>
+                              {isDivida ? (
+                                <>
+                                  <div>{formatBRL(divida?.utilizado ?? 0)}</div>
+                                  {divida?.utilizadoPropria > 0 && divida?.utilizadoTerceiro > 0 && (
+                                    <div style={{ fontSize: "10px", fontWeight: "normal" }} className="fc-muted-col">
+                                      própria {formatBRL(divida.utilizadoPropria)} · terceiro {formatBRL(divida.utilizadoTerceiro)}
+                                    </div>
+                                  )}
+                                </>
+                              ) : "—"}
+                            </td>
+                            <td className="fc-mono" style={{ padding: "6px 8px", textAlign: "right", color: isDivida ? PALETTE.ink : PALETTE.brown }} onClick={() => filtrarPorCartao(nome)}>
+                              {isDivida ? (
+                                <>
+                                  <div>{formatBRL(divida?.utilizadoMes ?? 0)}</div>
+                                  {divida?.utilizadoMesPropria > 0 && divida?.utilizadoMesTerceiro > 0 && (
+                                    <div style={{ fontSize: "10px", fontWeight: "normal" }} className="fc-muted-col">
+                                      própria {formatBRL(divida.utilizadoMesPropria)} · terceiro {formatBRL(divida.utilizadoMesTerceiro)}
+                                    </div>
+                                  )}
+                                </>
+                              ) : "—"}
+                            </td>
+                            <td className="fc-mono" style={{ padding: "6px 8px", textAlign: "right", color: isDivida ? ((divida?.disponivel ?? 0) < 0 ? NEGATIVE : PALETTE.ink) : PALETTE.brown }} onClick={() => filtrarPorCartao(nome)}>
+                              {isDivida ? formatBRL(divida?.disponivel ?? 0) : "—"}
+                            </td>
+                            <td style={{ padding: "4px 8px", textAlign: "right" }}>
+                              {isSaldo ? (
+                                <input
+                                  type="number" step="0.01" style={{ ...smallInputStyle, textAlign: "right", width: "100px" }}
+                                  value={cfg.saldoInicial || ""} placeholder="0,00"
+                                  onChange={(e) => updateSaldoInicial(nome, e.target.value)}
+                                />
+                              ) : (
+                                <span style={{ color: PALETTE.brown }}>—</span>
+                              )}
+                            </td>
+                            <td style={{ padding: "4px 8px" }}>
+                              {isSaldo ? (
+                                <input
+                                  type="date" style={{ ...smallInputStyle, width: "130px" }}
+                                  value={cfg.dataCorte || ""}
+                                  onChange={(e) => updateDataCorte(nome, e.target.value)}
+                                />
+                              ) : (
+                                <span style={{ color: PALETTE.brown }}>—</span>
+                              )}
+                            </td>
+                            <td className="fc-mono" style={{ padding: "6px 8px", textAlign: "right", color: isSaldo ? PALETTE.ink : PALETTE.brown }} onClick={() => filtrarPorCartao(nome)}>
+                              {isSaldo ? formatBRL(liquidaEntry?.saldo ?? 0) : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {cartoesNaoClassificados.length > 0 && (
+                  <p className="fc-mono" style={{ fontSize: "11px", color: NEGATIVE, marginTop: "8px", marginBottom: 0 }}>
+                    ainda não classificados: {cartoesNaoClassificados.map((k) => cartaoDisplayNames[k] || k).join(", ")} — enquanto isso, eles ficam fora do saldo líquido e do painel de dívida.
+                  </p>
+                )}
+              </>
+            )}
+            <p className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown, marginTop: "8px", marginBottom: 0 }}>
+              clique no nome ou nos valores de um cartão pra filtrar a tabela por ele
+            </p>
+          </div>
+        )}
+
+        {showForm && (
+          <form onSubmit={handleAdd} style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "1rem", marginBottom: "1.5rem" }}>
+            <div style={{ marginBottom: "12px" }}>
+              <label style={labelStyle}>tipo de lançamento</label>
+              <select style={inputStyle} value={form.formTipo} onChange={(e) => setForm({ ...emptyForm, formTipo: e.target.value, data: form.data })}>
+                <option value="simples">Pagamento ou recebimento simples</option>
+                <option value="transferencia">Transferência entre minhas contas</option>
+                <option value="compra">Compra no cartão (à vista ou parcelada)</option>
+                <option value="emprestimo">Empréstimo (ativo ou passivo)</option>
+                <option value="recorrente">Pagamento/recebimento recorrente (sem fatura)</option>
+              </select>
+            </div>
+
+            {form.formTipo === "simples" && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+                <div>
+                  <label style={labelStyle}>data</label>
+                  <input type="date" style={inputStyle} value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+                </div>
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={labelStyle}>descrição</label>
+                  <input type="text" style={inputStyle} placeholder="Ex: Mercado, Salário..." value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>tipo</label>
+                  <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                    <option value="S">Saída</option>
+                    <option value="E">Entrada</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>valor (R$)</label>
+                  <input type="number" step="0.01" style={inputStyle} placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>cartão / forma</label>
+                  <input list="cartoes-conhecidos" style={inputStyle} value={form.cartao} onChange={(e) => setForm({ ...form, cartao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>status pgto</label>
+                  <select style={inputStyle} value={form.statusPgto} onChange={(e) => setForm({ ...form, statusPgto: e.target.value })}>
+                    <option value="Pago">Pago</option>
+                    <option value="-">Pendente</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>fonte (opcional)</label>
+                  <input type="text" style={inputStyle} value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value })} />
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.previsto} onChange={(e) => setForm({ ...form, previsto: e.target.checked })} />
+                    previsto (ainda não efetivado)
+                  </label>
+                </div>
+                <div>
+                  <label style={labelStyle}>natureza (opcional)</label>
+                  <select style={inputStyle} value={form.natureza} onChange={(e) => setForm({ ...form, natureza: e.target.value })}>
+                    <option value="">Herdar do cartão</option>
+                    <option value="liquida">Conta líquida</option>
+                    <option value="divida">Dívida</option>
+                    <option value="restrito">Saldo restrito</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>titularidade</label>
+                  <select style={inputStyle} value={form.titularidade} onChange={(e) => setForm({ ...form, titularidade: e.target.value })}>
+                    <option value="propria">Própria</option>
+                    <option value="terceiro">De terceiro</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {form.formTipo === "transferencia" && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+                <div>
+                  <label style={labelStyle}>data</label>
+                  <input type="date" style={inputStyle} value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+                </div>
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={labelStyle}>descrição (opcional)</label>
+                  <input type="text" style={inputStyle} placeholder="Ex: Reserva de emergência" value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>valor (R$)</label>
+                  <input type="number" step="0.01" style={inputStyle} placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>conta de origem</label>
+                  <input list="cartoes-conhecidos" style={inputStyle} value={form.contaOrigem} onChange={(e) => setForm({ ...form, contaOrigem: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>conta de destino</label>
+                  <input list="cartoes-conhecidos" style={inputStyle} value={form.contaDestino} onChange={(e) => setForm({ ...form, contaDestino: e.target.value })} />
+                </div>
+              </div>
+            )}
+
+            {form.formTipo === "compra" && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+                <div>
+                  <label style={labelStyle}>data do 1º vencimento</label>
+                  <input type="date" style={inputStyle} value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>data da compra (opcional)</label>
+                  <input type="date" style={inputStyle} value={form.dataCompra} onChange={(e) => setForm({ ...form, dataCompra: e.target.value })} />
+                </div>
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={labelStyle}>descrição</label>
+                  <input type="text" style={inputStyle} placeholder="Ex: Notebook, Roupas..." value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>valor total (R$)</label>
+                  <input type="number" step="0.01" style={inputStyle} placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>cartão</label>
+                  <input list="cartoes-conhecidos" style={inputStyle} value={form.cartao} onChange={(e) => setForm({ ...form, cartao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>forma de pagamento</label>
+                  <select style={inputStyle} value={form.parcelado ? "parcelado" : "avista"} onChange={(e) => setForm({ ...form, parcelado: e.target.value === "parcelado" })}>
+                    <option value="avista">À vista</option>
+                    <option value="parcelado">Parcelado</option>
+                  </select>
+                </div>
+                {form.parcelado && (
+                  <div>
+                    <label style={labelStyle}>número de parcelas</label>
+                    <input type="number" min="2" step="1" style={inputStyle} value={form.parcelas} onChange={(e) => setForm({ ...form, parcelas: e.target.value })} />
+                  </div>
+                )}
+                <div>
+                  <label style={labelStyle}>titularidade</label>
+                  <select style={inputStyle} value={form.titularidade} onChange={(e) => setForm({ ...form, titularidade: e.target.value })}>
+                    <option value="propria">Própria</option>
+                    <option value="terceiro">De terceiro</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {form.formTipo === "emprestimo" && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+                <div>
+                  <label style={labelStyle}>tipo de empréstimo</label>
+                  <select style={inputStyle} value={form.subtipoEmprestimo} onChange={(e) => setForm({ ...form, subtipoEmprestimo: e.target.value })}>
+                    <option value="ativo">Ativo (eu empresto)</option>
+                    <option value="passivo">Passivo (eu tomo emprestado)</option>
+                  </select>
+                </div>
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={labelStyle}>descrição</label>
+                  <input type="text" style={inputStyle} placeholder="Ex: Empréstimo pra Cesinha" value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>valor líquido (R$)</label>
+                  <input type="number" step="0.01" style={inputStyle} placeholder="0,00" value={form.valorLiquido} onChange={(e) => setForm({ ...form, valorLiquido: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>valor total a {form.subtipoEmprestimo === "ativo" ? "receber" : "pagar"} (R$)</label>
+                  <input type="number" step="0.01" style={inputStyle} placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>número de parcelas</label>
+                  <input type="number" min="1" step="1" style={inputStyle} value={form.parcelas} onChange={(e) => setForm({ ...form, parcelas: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>data do líquido</label>
+                  <input type="date" style={inputStyle} value={form.dataLiquido} onChange={(e) => setForm({ ...form, dataLiquido: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>data do 1º vencimento</label>
+                  <input type="date" style={inputStyle} value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>cartão / conta</label>
+                  <input list="cartoes-conhecidos" style={inputStyle} value={form.cartao} onChange={(e) => setForm({ ...form, cartao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>fonte (opcional)</label>
+                  <input type="text" style={inputStyle} placeholder="Nome da pessoa" value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value })} />
+                </div>
+              </div>
+            )}
+
+            {form.formTipo === "recorrente" && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }}>
+                <div>
+                  <label style={labelStyle}>primeira data</label>
+                  <input type="date" style={inputStyle} value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+                </div>
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={labelStyle}>descrição</label>
+                  <input type="text" style={inputStyle} placeholder="Ex: Salário, Aluguel, Mensalidade..." value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>tipo</label>
+                  <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                    <option value="S">Saída</option>
+                    <option value="E">Entrada</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>valor por ocorrência (R$)</label>
+                  <input type="number" step="0.01" style={inputStyle} placeholder="0,00" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>frequência</label>
+                  <select style={inputStyle} value={form.frequencia} onChange={(e) => setForm({ ...form, frequencia: e.target.value })}>
+                    <option value="mensal">Mensal</option>
+                    <option value="quinzenal">Quinzenal (a cada 15 dias)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>quantas vezes</label>
+                  <input type="number" min="1" step="1" style={inputStyle} value={form.repeticoes} onChange={(e) => setForm({ ...form, repeticoes: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>cartão / forma</label>
+                  <input list="cartoes-conhecidos" style={inputStyle} value={form.cartao} onChange={(e) => setForm({ ...form, cartao: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>fonte (opcional)</label>
+                  <input type="text" style={inputStyle} value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>natureza (opcional)</label>
+                  <select style={inputStyle} value={form.natureza} onChange={(e) => setForm({ ...form, natureza: e.target.value })}>
+                    <option value="">Herdar do cartão</option>
+                    <option value="liquida">Conta líquida</option>
+                    <option value="divida">Dívida</option>
+                    <option value="restrito">Saldo restrito</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {formError && <div style={{ color: NEGATIVE, fontSize: "13px", marginTop: "10px" }}>{formError}</div>}
+            <div style={{ display: "flex", gap: "8px", marginTop: "14px" }}>
+              <button type="submit" className="fc-btn fc-btn-accent">Salvar lançamento</button>
+              <button type="button" className="fc-btn" onClick={() => { setShowForm(false); setFormError(""); setForm(emptyForm); }}>Cancelar</button>
+            </div>
+          </form>
+        )}
+
+        {transactions.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "3rem 1rem", color: PALETTE.brown }}>
+            <p className="fc-serif" style={{ fontSize: "17px", margin: "0 0 6px", color: PALETTE.ink }}>Nenhum lançamento ainda</p>
+            <p style={{ fontSize: "14px", margin: 0 }}>Importe sua planilha "Orçamento Dinâmico" (.xlsx) para começar a ver o fluxo.</p>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-end", marginBottom: "10px" }}>
+              <div>
+                <label style={labelStyle}>de</label>
+                <input type="date" style={inputStyle} min={earliestDate ? toInputDate(earliestDate) : undefined} value={dateFromDraft} onChange={(e) => setDateFromDraft(e.target.value)} onKeyDown={handleDateKeyDown} />
+              </div>
+              <div>
+                <label style={labelStyle}>até</label>
+                <input type="date" style={inputStyle} min={earliestDate ? toInputDate(earliestDate) : undefined} value={dateToDraft} onChange={(e) => setDateToDraft(e.target.value)} onKeyDown={handleDateKeyDown} />
+              </div>
+              <button type="button" className="fc-btn fc-btn-accent" onClick={applyDateFilter}>Aplicar filtro</button>
+            </div>
+            {dateError && <div style={{ color: NEGATIVE, fontSize: "13px", marginBottom: "10px" }}>{dateError}</div>}
+
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "1.25rem" }}>
+              <MultiSelectDropdown title="Status" options={statusOptions} selected={filtroStatus} onChange={setFiltroStatus} />
+              <MultiSelectDropdown title="Fonte" options={fonteOptions} selected={filtroFonte} onChange={setFiltroFonte} />
+              <MultiSelectDropdown title="Previsto" options={previstoOptions} selected={filtroPrevisto} onChange={setFiltroPrevisto} />
+              <MultiSelectDropdown title="Cartão" options={cartaoOptions} selected={filtroCartao} onChange={setFiltroCartao} />
+              <MultiSelectDropdown title="Titularidade" options={titularidadeOptions} selected={filtroTitularidade} onChange={setFiltroTitularidade} />
+              <MultiSelectDropdown title="Natureza" options={naturezaOptions} selected={filtroNatureza} onChange={setFiltroNatureza} />
+              <input type="text" placeholder="Buscar descrição..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...searchInputStyle, width: "200px" }} />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "12px", marginBottom: "1.25rem" }}>
+              <div style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "12px 14px", textAlign: "center" }}>
+                <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>saldo inicial do período</div>
+                <div className="fc-mono" style={{ fontSize: "20px", fontWeight: 500, color: PALETTE.accent }}>{formatBRL(summary.saldoInicial)}</div>
+              </div>
+              <div style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "12px 14px", textAlign: "center" }}>
+                <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>entradas no período</div>
+                <div className="fc-mono" style={{ fontSize: "20px", fontWeight: 500, color: POSITIVE }}>{formatBRL(summary.entradas)}</div>
+              </div>
+              <div style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "12px 14px", textAlign: "center" }}>
+                <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>saídas no período</div>
+                <div className="fc-mono" style={{ fontSize: "20px", fontWeight: 500, color: NEGATIVE }}>{formatBRL(summary.saidas)}</div>
+              </div>
+              <div style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "12px 14px", textAlign: "center" }}>
+                <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>líquido no período</div>
+                <div className="fc-mono" style={{ fontSize: "20px", fontWeight: 500, color: PALETTE.ink }}>{formatBRL(summary.liquido)}</div>
+              </div>
+              <div style={{ background: PALETTE.taupe + "40", borderRadius: "4px", padding: "12px 14px", textAlign: "center" }}>
+                <div className="fc-mono" style={{ fontSize: "11px", color: PALETTE.brown }}>saldo final do período</div>
+                <div className="fc-mono" style={{ fontSize: "20px", fontWeight: 500, color: PALETTE.accent }}>{formatBRL(summary.saldoFinal)}</div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
+              <button className={`fc-btn ${chartView === "saldo" ? "fc-btn-active" : ""}`} onClick={() => setChartView("saldo")}>Saldo</button>
+              <button className={`fc-btn ${chartView === "fluxo" ? "fc-btn-active" : ""}`} onClick={() => setChartView("fluxo")}>Entradas e saídas</button>
+            </div>
+
+            <div style={{ marginBottom: "1.5rem" }}>
+              {activeChartData.length === 0 ? (
+                <div style={{ padding: "1.5rem", textAlign: "center", color: PALETTE.brown, fontSize: "13px", border: `1px solid ${PALETTE.taupe}`, borderRadius: "4px" }}>
+                  Sem dados para o período selecionado.
+                </div>
+              ) : (
+                <div style={{ width: "100%", height: 220 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    {chartView === "saldo" ? (
+                      <LineChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+                        <CartesianGrid stroke={PALETTE.taupe} strokeDasharray="3 3" vertical={false} />
+                        <XAxis
+                          dataKey="key" interval={tickInterval}
+                          tick={{ fontSize: 11, fill: PALETTE.brown, fontFamily: "IBM Plex Mono, monospace" }}
+                          tickFormatter={(k, i) => {
+                            if (isSingleDay) { const p = chartData[i]; return p ? formatTime(p.dateObj) : k; }
+                            const [, m, d] = k.split("-"); return `${d}/${m}`;
+                          }}
+                          axisLine={{ stroke: PALETTE.taupe }} tickLine={false}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 11, fill: PALETTE.brown, fontFamily: "IBM Plex Mono, monospace" }}
+                          tickFormatter={(v) => v.toLocaleString("pt-BR", { notation: "compact", maximumFractionDigits: 0 })}
+                          axisLine={false} tickLine={false} width={64}
+                        />
+                        <Tooltip content={<SaldoTooltip />} />
+                        <Line type="monotone" dataKey="saldo" stroke={PALETTE.accent} strokeWidth={2} dot={isSingleDay} activeDot={{ r: 4 }} />
+                      </LineChart>
+                    ) : (
+                      <BarChart data={fluxoChartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+                        <CartesianGrid stroke={PALETTE.taupe} strokeDasharray="3 3" vertical={false} />
+                        <XAxis
+                          dataKey="key" interval={tickInterval}
+                          tick={{ fontSize: 11, fill: PALETTE.brown, fontFamily: "IBM Plex Mono, monospace" }}
+                          tickFormatter={(k, i) => {
+                            if (isSingleDay) { const p = fluxoChartData[i]; return p ? formatTime(p.dateObj) : k; }
+                            const [, m, d] = k.split("-"); return `${d}/${m}`;
+                          }}
+                          axisLine={{ stroke: PALETTE.taupe }} tickLine={false}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 11, fill: PALETTE.brown, fontFamily: "IBM Plex Mono, monospace" }}
+                          tickFormatter={(v) => v.toLocaleString("pt-BR", { notation: "compact", maximumFractionDigits: 0 })}
+                          axisLine={false} tickLine={false} width={64}
+                        />
+                        <Tooltip content={<FluxoTooltip />} />
+                        <Bar dataKey="entradas" fill={POSITIVE} />
+                        <Bar dataKey="saidas" fill={NEGATIVE} />
+                      </BarChart>
+                    )}
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            {selectedIds.size > 0 && (
+              <div style={{ background: PALETTE.accent + "15", border: `1px solid ${PALETTE.accent}`, borderRadius: "4px", padding: "12px", marginBottom: "10px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", marginBottom: "8px" }}>
+                  <span className="fc-mono" style={{ fontSize: "13px", fontWeight: 500, color: PALETTE.ink }}>
+                    {selectedIds.size} selecionado{selectedIds.size > 1 ? "s" : ""}
+                  </span>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                    {!bulkDeleteConfirming ? (
+                      <button className="fc-icon-btn danger" style={{ border: `1px solid ${NEGATIVE}`, borderRadius: "3px", padding: "6px 10px" }} onClick={() => { setBulkDeleteConfirming(true); setBulkConfirming(false); }}>
+                        <IconTrash size={14} />
+                        <span style={{ marginLeft: "6px", fontFamily: "'IBM Plex Mono', monospace", fontSize: "12px" }}>Excluir selecionados</span>
+                      </button>
+                    ) : (
+                      <>
+                        <span className="fc-mono" style={{ fontSize: "12px", color: NEGATIVE }}>
+                          Excluir {selectedIds.size} lançamento{selectedIds.size > 1 ? "s" : ""}? Não dá pra desfazer.
+                        </span>
+                        <button
+                          className="fc-btn"
+                          style={{ borderColor: NEGATIVE, color: NEGATIVE }}
+                          onClick={applyBulkDelete}
+                        >
+                          Confirmar exclusão
+                        </button>
+                        <button className="fc-btn" onClick={() => setBulkDeleteConfirming(false)}>
+                          Cancelar
+                        </button>
+                      </>
+                    )}
+                    <button className="fc-btn" onClick={() => setSelectedIds(new Set())}>
+                      Limpar seleção
+                    </button>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                  <select
+                    style={smallInputStyle}
+                    value={bulkField}
+                    onChange={(e) => {
+                      setBulkField(e.target.value);
+                      setBulkValue("");
+                      setBulkConfirming(false);
+                    }}
+                  >
+                    <option value="natureza">Natureza</option>
+                    <option value="titularidade">Titularidade</option>
+                    <option value="status">Status</option>
+                    <option value="fonte">Fonte</option>
+                    <option value="previsto">Previsto</option>
+                    <option value="cartao">Cartão</option>
+                    <option value="valor">Valor</option>
+                    <option value="data_vencimento">Data (vencimento)</option>
+                    <option value="data_compra">Data da compra</option>
+                  </select>
+
+                  <span className="fc-mono" style={{ fontSize: "12px", color: PALETTE.brown }}>para</span>
+
+                  {bulkField === "natureza" && (
+                    <select style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                      <option value="">Herdar do cartão</option>
+                      <option value="liquida">Conta líquida</option>
+                      <option value="divida">Dívida</option>
+                      <option value="restrito">Saldo restrito</option>
+                    </select>
+                  )}
+                  {bulkField === "titularidade" && (
+                    <select style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                      <option value="">Selecione</option>
+                      <option value="propria">Própria</option>
+                      <option value="terceiro">Terceiro</option>
+                    </select>
+                  )}
+                  {bulkField === "status" && (
+                    <select style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                      <option value="">Selecione</option>
+                      <option value="pago">Pago</option>
+                      <option value="pendente">Pendente</option>
+                    </select>
+                  )}
+                  {bulkField === "fonte" && (
+                    <input type="text" style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} placeholder="novo texto" />
+                  )}
+                  {bulkField === "previsto" && (
+                    <select style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="nao">Não</option>
+                    </select>
+                  )}
+                  {bulkField === "cartao" && (
+                    <input list="cartoes-conhecidos" style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} placeholder="novo cartão" />
+                  )}
+                  {bulkField === "valor" && (
+                    <input type="number" step="0.01" style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} placeholder="0,00" />
+                  )}
+                  {(bulkField === "data_vencimento" || bulkField === "data_compra") && (
+                    <>
+                      <select style={smallInputStyle} value={bulkDateMode} onChange={(e) => { setBulkDateMode(e.target.value); setBulkValue(""); }}>
+                        <option value="exata">Definir data exata</option>
+                        <option value="deslocar">Deslocar em dias</option>
+                      </select>
+                      {bulkDateMode === "exata" ? (
+                        <input type="date" style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} />
+                      ) : (
+                        <input type="number" step="1" style={smallInputStyle} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} placeholder="ex: 5 ou -10" />
+                      )}
+                    </>
+                  )}
+
+                  {!bulkConfirming ? (
+                    <button className="fc-btn fc-btn-accent" onClick={() => { setBulkConfirming(true); setBulkDeleteConfirming(false); }} disabled={bulkValue === ""}>
+                      Aplicar
+                    </button>
+                  ) : (
+                    <>
+                      <span className="fc-mono" style={{ fontSize: "12px", color: PALETTE.ink }}>
+                        Confirma aplicar a {selectedIds.size} lançamento{selectedIds.size > 1 ? "s" : ""}?
+                      </span>
+                      <button className="fc-btn fc-btn-accent" onClick={applyBulkEdit}>
+                        Confirmar
+                      </button>
+                      <button className="fc-btn" onClick={() => setBulkConfirming(false)}>
+                        Cancelar
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div style={{ overflowX: "auto", border: `1px solid ${PALETTE.taupe}`, borderRadius: "4px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                <thead>
+                  <tr className="fc-mono" style={{ background: PALETTE.taupe + "40", color: PALETTE.brown, fontSize: "11px" }}>
+                    <th style={{ padding: "8px 6px", width: "30px" }}>
+                      <input
+                        type="checkbox"
+                        checked={tableRows.length > 0 && tableRows.every((t) => selectedIds.has(t.id))}
+                        onChange={toggleSelectAllFiltered}
+                        title="Selecionar tudo que está filtrado"
+                      />
+                    </th>
+                    <th style={{ padding: "8px 6px", width: "56px" }}></th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>vencimento</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>compra</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>descrição</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>cartão</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>status</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>fonte</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>previsto</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>natureza</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px" }}>titularidade</th>
+                    <th style={{ textAlign: "right", padding: "8px 10px" }}>valor</th>
+                    <th style={{ textAlign: "right", padding: "8px 10px" }}>saldo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.length === 0 && (
+                    <tr><td colSpan={13} style={{ padding: "16px", textAlign: "center", color: PALETTE.brown }}>Nenhum lançamento encontrado para esse filtro.</td></tr>
+                  )}
+                  {visibleRows.map((t) => {
+                    const isEditing = editingId === t.id;
+                    if (isEditing) {
+                      return (
+                        <tr key={t.id} style={{ borderTop: `1px solid ${PALETTE.taupe}`, background: PALETTE.taupe + "30" }}>
+                          <td style={{ padding: "6px", textAlign: "center" }}>
+                            <input type="checkbox" checked={selectedIds.has(t.id)} onChange={() => toggleSelectOne(t.id)} />
+                          </td>
+                          <td style={{ padding: "6px", whiteSpace: "nowrap" }}>
+                            <button type="button" className="fc-icon-btn accent" title="Salvar" onClick={() => saveEdit(t.id)}><IconCheck size={14} /></button>
+                            <button type="button" className="fc-icon-btn" title="Cancelar" onClick={cancelEdit}><IconX size={14} /></button>
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <input type="date" style={smallInputStyle} value={editDraft.data} onChange={(e) => setEditDraft({ ...editDraft, data: e.target.value })} />
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <input type="date" style={smallInputStyle} value={editDraft.dataCompra} onChange={(e) => setEditDraft({ ...editDraft, dataCompra: e.target.value })} />
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <input type="text" style={smallInputStyle} value={editDraft.descricao} onChange={(e) => setEditDraft({ ...editDraft, descricao: e.target.value })} />
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <input list="cartoes-conhecidos" style={smallInputStyle} value={editDraft.cartao} onChange={(e) => setEditDraft({ ...editDraft, cartao: e.target.value })} />
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <select style={smallInputStyle} value={editDraft.statusPgto} onChange={(e) => setEditDraft({ ...editDraft, statusPgto: e.target.value })}>
+                              <option value="Pago">Pago</option>
+                              <option value="-">Pendente</option>
+                            </select>
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <input type="text" style={smallInputStyle} value={editDraft.fonte} onChange={(e) => setEditDraft({ ...editDraft, fonte: e.target.value })} />
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <select style={smallInputStyle} value={editDraft.previsto ? "sim" : "nao"} onChange={(e) => setEditDraft({ ...editDraft, previsto: e.target.value === "sim" })}>
+                              <option value="nao">Não</option>
+                              <option value="sim">Sim</option>
+                            </select>
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <select style={smallInputStyle} value={editDraft.natureza} onChange={(e) => setEditDraft({ ...editDraft, natureza: e.target.value })}>
+                              <option value="">Herdar</option>
+                              <option value="liquida">Líquida</option>
+                              <option value="divida">Dívida</option>
+                              <option value="restrito">Restrito</option>
+                            </select>
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <select style={smallInputStyle} value={editDraft.titularidade} onChange={(e) => setEditDraft({ ...editDraft, titularidade: e.target.value })}>
+                              <option value="propria">Própria</option>
+                              <option value="terceiro">Terceiro</option>
+                            </select>
+                          </td>
+                          <td style={{ padding: "6px" }}>
+                            <input type="number" step="0.01" style={{ ...smallInputStyle, textAlign: "right" }} value={editDraft.valor} onChange={(e) => setEditDraft({ ...editDraft, valor: e.target.value })} />
+                          </td>
+                          <td className="fc-mono" style={{ padding: "6px 10px", textAlign: "right", color: PALETTE.brown }}>{formatBRL(t.saldoCalc)}</td>
+                        </tr>
+                      );
+                    }
+                    return (
+                      <tr key={t.id} className="fc-row" style={{ borderTop: `1px solid ${PALETTE.taupe}` }}>
+                        <td style={{ padding: "6px", textAlign: "center" }}>
+                          <input type="checkbox" checked={selectedIds.has(t.id)} onChange={() => toggleSelectOne(t.id)} />
+                        </td>
+                        <td style={{ padding: "6px", whiteSpace: "nowrap" }}>
+                          <button type="button" className="fc-icon-btn" title="Editar" onClick={() => startEdit(t)}><IconEdit size={14} /></button>
+                          <button type="button" className="fc-icon-btn danger" title="Excluir" onClick={() => deleteTransaction(t.id)}><IconTrash size={14} /></button>
+                        </td>
+                        <td className="fc-mono" style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{formatDate(t.dateObj)}</td>
+                        <td className="fc-muted-col fc-mono" style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{formatDate(t.dataCompra ? new Date(t.dataCompra) : null)}</td>
+                        <td style={{ padding: "7px 10px" }}>
+                          {t.descricao}
+                          {t.origem === "novo" && (
+                            <span className="fc-mono" style={{ marginLeft: "8px", fontSize: "10px", color: PALETTE.accent, border: `1px solid ${PALETTE.accent}`, borderRadius: "3px", padding: "1px 5px" }}>novo</span>
+                          )}
+                        </td>
+                        <td className="fc-muted-col" style={{ padding: "7px 10px" }}>{t.cartao || "—"}</td>
+                        <td className="fc-muted-col" style={{ padding: "7px 10px" }}>{isPago(t.statusPgto) ? "Pago" : "Pendente"}</td>
+                        <td className="fc-muted-col" style={{ padding: "7px 10px" }}>{t.fonte || "—"}</td>
+                        <td className="fc-muted-col" style={{ padding: "7px 10px" }}>{t.previsto ? "Sim" : "Não"}</td>
+                        <td className="fc-muted-col" style={{ padding: "7px 10px", fontStyle: t.natureza ? "normal" : "italic" }}>
+                          {(() => {
+                            const nat = effectiveNatureza(t, limites);
+                            return nat ? NATUREZA_LABELS[nat] : "não classificado";
+                          })()}
+                        </td>
+                        <td className="fc-muted-col" style={{ padding: "7px 10px" }}>{TITULARIDADE_LABELS[effectiveTitularidade(t)]}</td>
+                        <td className="fc-mono" style={{ padding: "7px 10px", textAlign: "right", color: t.valor < 0 ? NEGATIVE : POSITIVE }}>{formatBRL(t.valor)}</td>
+                        <td className="fc-mono" style={{ padding: "7px 10px", textAlign: "right", color: PALETTE.ink }}>{formatBRL(t.saldoCalc)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {tableRows.length > visibleRows.length && (
+              <div style={{ textAlign: "center", padding: "12px" }}>
+                <button className="fc-btn" onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}>Carregar mais ({tableRows.length - visibleRows.length} restantes)</button>
+              </div>
+            )}
+            {editError && <div style={{ color: NEGATIVE, fontSize: "13px", marginTop: "8px" }}>{editError}</div>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<FluxoCaixa />);
+</script>
+</body>
+</html>

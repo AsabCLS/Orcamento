@@ -5,13 +5,12 @@ Um app de controle de fluxo de caixa construído para substituir uma planilha de
 ## Arquivos
 
 - **`fluxo-caixa.html`** — o app pronto pra usar. Baixe e dê duplo clique: abre no navegador padrão. Precisa de internet só na primeira abertura (carrega bibliotecas de um CDN); depois funciona offline até fechar a aba.
-- **`fluxo-caixa.jsx`** — o código-fonte do componente React. Não abre sozinho em nada; serve como base caso o app evolua pra um projeto com ferramentas de build (Vite, Next.js) no futuro.
 
-Se você só quer usar o app, precisa apenas do `.html`.
+Não é necessário instalar nada, ter Node.js ou rodar um build step — é um único arquivo HTML com React, Recharts e SheetJS/xlsx carregados via CDN e transpilado no próprio navegador com Babel Standalone.
 
 ## Armazenamento de dados
 
-Os dados ficam salvos no `localStorage` do navegador — ou seja, **no mesmo navegador, no mesmo computador**, enquanto você não limpar os dados de navegação. Não há nuvem, não há conta, não há sincronização entre dispositivos. Recomenda-se exportar o `.xlsx` periodicamente como backup.
+Os dados ficam salvos no `localStorage` do navegador — ou seja, **no mesmo navegador, no mesmo computador**, enquanto você não limpar os dados de navegação. Não há nuvem, não há conta, não há sincronização entre dispositivos. Recomenda-se exportar o `.xlsx` periodicamente como backup (a partir da versão 22, o próprio arquivo exportado também carrega a configuração de cartões — ver Changelog).
 
 ## Como importar seus dados
 
@@ -32,9 +31,11 @@ O botão **Importar .xlsx** lê uma planilha com uma aba contendo, no mínimo, c
 
 Nomes de cartão são comparados ignorando maiúsculas/minúsculas e espaços nas pontas (ex.: "Nubank" e "nubank" são tratados como a mesma conta).
 
+A partir da versão 22, se a planilha tiver uma segunda aba com "cart" no nome (ex. "Cartões e limites") e coluna "Cartão", a configuração de natureza/crédito total/saldo inicial/data de corte de cada conta é lida e mesclada automaticamente — não precisa recadastrar os cartões ao importar em outro computador.
+
 ## Tipos de lançamento
 
-O botão **Novo lançamento** oferece quatro modalidades:
+O botão **Novo lançamento** oferece cinco modalidades:
 
 1. **Pagamento ou recebimento simples** — um único lançamento, entrada ou saída.
 2. **Transferência entre minhas contas** — gera automaticamente duas pontas (saída na origem, entrada no destino).
@@ -48,7 +49,7 @@ Esses dois campos resolvem o problema central de separar dinheiro real de dívid
 
 - **Natureza** — o que aquele lançamento representa:
   - *Conta líquida*: dinheiro seu, disponível.
-  - *Dívida*: uso de crédito (cartão, financiamento) — não é saldo, é passivo.
+  - *Dívida*: uso de crédito (cartão, financiamento) — não é saldo, é passivo enquanto pendente.
   - *Saldo restrito*: dinheiro real, mas de uso limitado (vale-refeição, benefícios).
 - **Titularidade** — de quem é a dívida: *Própria* ou *Terceiro* (ex.: alguém que gastou no seu cartão emprestado). Não afeta o cálculo de crédito utilizado — o limite consumido é o mesmo independentemente de quem gastou.
 
@@ -57,11 +58,12 @@ Cada cartão/conta tem uma natureza **padrão**, definida uma vez no painel "Car
 ## Painel "Cartões e limites"
 
 Cadastro por cartão/conta com:
+
 - **Natureza** (define o padrão de herança dos lançamentos daquele nome).
 - **Crédito total** (só relevante pra Dívida).
-- **Utilizado / Utilizado no mês / Disponível** — calculados a partir de lançamentos com status Pendente, excluindo os marcados como Previsto. Mostra também o detalhamento Própria/Terceiro quando há mistura.
-- **Saldo inicial + "a partir de"** — pra contas líquidas/restritas, permite ignorar todo o histórico anterior a uma data de corte e partir de um saldo real conhecido (útil quando o histórico tem lacunas de dupla entrada).
-- **Saldo** — soma apenas de lançamentos com status "Pago", refletindo sempre o saldo atual real (não o previsto/futuro).
+- **Utilizado / Utilizado no mês / Disponível** — calculados a partir de lançamentos de natureza Dívida com status Pendente, excluindo os marcados como Previsto. Mostra também o detalhamento Própria/Terceiro quando há mistura.
+- **Saldo inicial + "a partir de"** — permite ignorar todo o histórico anterior a uma data de corte e partir de um saldo real conhecido (útil quando o histórico tem lacunas de dupla entrada).
+- **Saldo** — saldo *projetado* da conta: saldo inicial + todo lançamento dessa conta a partir da data de corte, **de qualquer natureza** (líquida, restrita ou dívida) e **pago, pendente ou previsto**. Saldo financeiro e limite de crédito são cálculos deliberadamente diferentes: uma dívida marcada como paga abate direto do saldo da própria conta (pode até ficar negativo, até você ajustar via transferência de outra conta), e uma conta a pagar/receber já lançada entra na projeção mesmo antes de ser paga. Pra ver só o saldo já realizado, filtre Status = Pago e Previsto = Não.
 
 Clicar no nome de um cartão, ou em qualquer valor da linha, filtra a tabela principal só por ele.
 
@@ -82,18 +84,33 @@ Alterna entre duas visões:
 
 ## Exportação
 
-- **Exportar tudo** — gera um `.xlsx` com todos os lançamentos (importados + novos), incluindo a natureza e titularidade já resolvidas (herdadas do cartão quando aplicável).
-- **Exportar só novos** — só os lançamentos criados dentro do app, prontos pra colar no final da planilha original (as colunas calculadas por fórmula, como Saldo corrido, o próprio Excel recalcula ao colar dentro de uma Tabela estruturada).
+- **Exportar tudo** — gera um `.xlsx` com todos os lançamentos (importados + novos), incluindo a natureza e titularidade já resolvidas (herdadas do cartão quando aplicável), mais uma aba "Cartões e limites" com a configuração de cada conta.
+- **Exportar só novos** — só os lançamentos criados dentro do app, prontos pra colar no final da planilha original (as colunas calculadas por fórmula, como Saldo corrido, o próprio Excel recalcula ao colar dentro de uma Tabela estruturada) — também inclui a aba "Cartões e limites".
 
 **Atenção**: reimportar um arquivo exportado grava a natureza como valor fixo em cada linha (não mais "herdado do cartão"). Se depois você mudar a classificação padrão de um cartão, essas linhas reimportadas não seguem a mudança automaticamente.
 
 ## Limitações conhecidas
 
-- O sistema usa partidas dobradas apenas na quitação de fatura (marcar parcela como Pago + lançar a saída real da conta que pagou) — hoje isso é manual, em dois passos.
+- Quitação de fatura paga com dinheiro de **outra** conta ainda é manual em dois passos: marcar a dívida como Pago (isso já abate da própria conta da dívida) e lançar uma "Transferência entre minhas contas" levando o dinheiro da conta que efetivamente pagou até a conta da dívida, cobrindo o saldo negativo.
 - Sem gerenciamento dedicado de empréstimos (visão por pessoa/credor) ou investimentos — possíveis próximos passos.
 - Um "fluxo de utilização por data de compra" (separado do vencimento) ainda não tem visualização própria, embora o dado já seja coletado.
-- Dados vivem só no navegador local — sem backup automático em nuvem.
+- Dados vivem só no navegador local — sem backup automático em nuvem além da exportação manual do `.xlsx`.
 
 ## Stack técnica
 
 React 18 + Recharts (gráficos) + SheetJS/xlsx (leitura e escrita de planilhas), tudo carregado via CDN e transpilado no próprio navegador com Babel Standalone — não requer instalação, Node.js ou build step.
+
+## Changelog
+
+**v26** — "Previsto" agora também conta no saldo. Saldo financeiro e limite de crédito são coisas diferentes: saldo é toda entrada/saída (pago, pendente ou previsto), sem exceção; só o "utilizado" do limite de crédito continua ignorando lançamentos "Previsto".
+
+**v25** — O "Saldo" voltou a contar lançamentos pendentes, não só os pagos, pra servir de previsão de saldo futuro (a v24 tinha restringido demais, contando só pago).
+
+**v24** — Dívida marcada como "Pago" passou a abater do saldo da própria conta (antes só natureza líquida/restrita contava, mesmo quando cartão e carteira eram a mesma conta). Se a conta não tiver saldo suficiente, fica negativa — ajuste manual via "Transferência entre minhas contas".
+
+**v23** — Saldo por movimento (coluna "Saldo" da tabela, "saldo final do período", linha do gráfico) passou a usar o mesmo cálculo reconciliado do painel "Cartões e limites", em vez de somar cegamente todo lançamento (o que misturava dívida com dinheiro real).
+
+**v22** —
+1. Cabeçalho de exportação corrigido: a coluna de vencimento na planilha exportada passou a se chamar "Data" (compatível com o que a importação espera).
+2. Backup de "Cartões e limites" na planilha exportada/importada.
+3. Saldo do painel "Cartões e limites" passou a respeitar o filtro "até" do período selecionado.

@@ -43,7 +43,7 @@ window.storage = {
 
 
 const CORE_HEADERS = [
-  "Data (vencimento)",
+  "Data",
   "Data da compra",
   "Descrição",
   "Valor",
@@ -56,6 +56,9 @@ const CORE_HEADERS = [
   "Natureza",
   "Titularidade",
 ];
+
+const CARTOES_SHEET_NAME = "Cartões e limites";
+const CARTOES_HEADERS = ["Cartão", "Natureza", "Crédito total", "Saldo inicial", "A partir de"];
 
 const STORAGE_KEY = "fluxo-caixa:transacoes";
 const LIMITES_KEY = "fluxo-caixa:limites";
@@ -281,10 +284,53 @@ function parseWorkbook(arrayBuffer) {
       })(),
     });
   }
-  return { transactions: out, sheetName };
+  const limites = parseLimitesSheet(wb);
+  return { transactions: out, sheetName, limites };
 }
 
-function buildExportWorkbook(transactions, cartaoConfig) {
+function parseLimitesSheet(wb) {
+  const sheetName = wb.SheetNames.find((n) => n.toLowerCase().includes("cart"));
+  if (!sheetName) return null;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const row = rows[i] || [];
+    if (row.some((c) => String(c).trim() === "Cartão")) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) return null;
+  const headers = rows[headerIdx].map((h) => (h === null ? "" : String(h).trim()));
+  const idx = {};
+  headers.forEach((h, i) => {
+    if (h) idx[h] = i;
+  });
+  if (idx["Cartão"] === undefined) return null;
+
+  const limites = {};
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const nomeRaw = row[idx["Cartão"]];
+    if (!nomeRaw) continue;
+    const key = cartaoKey(nomeRaw);
+    if (!key) continue;
+    const naturezaRaw = idx["Natureza"] !== undefined ? row[idx["Natureza"]] : null;
+    const dataCorteRaw = idx["A partir de"] !== undefined ? row[idx["A partir de"]] : null;
+    const dataCorteObj = excelSerialToDate(dataCorteRaw);
+    limites[key] = {
+      creditoTotal: idx["Crédito total"] !== undefined ? parseFloat(row[idx["Crédito total"]]) || 0 : 0,
+      natureza: naturezaRaw ? NATUREZA_FROM_LABEL[String(naturezaRaw).trim().toLowerCase()] || null : null,
+      saldoInicial: idx["Saldo inicial"] !== undefined ? parseFloat(row[idx["Saldo inicial"]]) || 0 : 0,
+      dataCorte: dataCorteObj ? toInputDate(dataCorteObj) : "",
+    };
+  }
+  return limites;
+}
+
+function buildExportWorkbook(transactions, cartaoConfig, cartaoDisplayNames) {
   const sorted = [...transactions].sort((a, b) => {
     const da = a.data ? new Date(a.data).getTime() : 0;
     const db = b.data ? new Date(b.data).getTime() : 0;
@@ -323,6 +369,31 @@ function buildExportWorkbook(transactions, cartaoConfig) {
   }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Lançamentos");
+
+  if (cartaoConfig && Object.keys(cartaoConfig).length > 0) {
+    const nomes = Object.keys(cartaoConfig).sort();
+    const cartoesData = [
+      CARTOES_HEADERS,
+      ...nomes.map((k) => {
+        const cfg = cartaoConfig[k] || {};
+        return [
+          (cartaoDisplayNames && cartaoDisplayNames[k]) || k,
+          cfg.natureza ? NATUREZA_LABELS[cfg.natureza] || cfg.natureza : "",
+          cfg.creditoTotal || 0,
+          cfg.saldoInicial || 0,
+          cfg.dataCorte ? new Date(cfg.dataCorte + "T12:00:00") : null,
+        ];
+      }),
+    ];
+    const wsCartoes = XLSX.utils.aoa_to_sheet(cartoesData);
+    wsCartoes["!cols"] = [{ wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+    for (let r = 1; r < cartoesData.length; r++) {
+      const ref = XLSX.utils.encode_cell({ r, c: 4 });
+      if (wsCartoes[ref]) wsCartoes[ref].z = "dd/mm/yyyy";
+    }
+    XLSX.utils.book_append_sheet(wb, wsCartoes, CARTOES_SHEET_NAME);
+  }
+
   return wb;
 }
 
@@ -609,28 +680,74 @@ function FluxoCaixa() {
     } catch (e) {}
   }, []);
 
+  // Contas com natureza classificada (líquida, dívida ou restrita), com sua data de
+  // corte e saldo inicial — mesma configuração usada no painel "Cartões e limites",
+  // derivada aqui direto de `transactions` (não de `ledger`) pra não criar dependência
+  // circular. Uma dívida marcada como "Pago" também mexe no saldo da própria conta:
+  // na prática, o dinheiro saiu daquela conta quando você quitou aquele lançamento —
+  // se a conta não tiver saldo suficiente, ela fica negativa até você ajustar via
+  // transferência de outra conta.
+  const contasClassificadas = useMemo(() => {
+    const nomes = new Set();
+    transactions.forEach((t) => {
+      const nome = cartaoKey(t.cartao) || SEM_CARTAO;
+      if (nome === SEM_CARTAO) return;
+      const nat = effectiveNatureza(t, limites);
+      if (nat) nomes.add(nome);
+    });
+    return Array.from(nomes).map((nome) => ({
+      nome,
+      corte: limites[nome]?.dataCorte ? new Date(limites[nome].dataCorte + "T23:59:59") : null,
+      saldoInicial: limites[nome]?.saldoInicial || 0,
+    }));
+  }, [transactions, limites]);
+
   const ledger = useMemo(() => {
     const sorted = [...transactions].sort((a, b) => {
       const da = a.data ? new Date(a.data).getTime() : 0;
       const db = b.data ? new Date(b.data).getTime() : 0;
       return da - db;
     });
-    let running = 0;
     const porCartao = {};
     const porCartaoNatureza = {};
+    // soma corrente por conta, só de lançamentos líquidos/restritos pagos e
+    // posteriores à data de corte de cada conta (mesmo critério do painel de cartões)
+    const contaRunning = {};
+    contasClassificadas.forEach((c) => { contaRunning[c.nome] = 0; });
+
     return sorted.map((t) => {
-      running += t.valor;
       const cartaoNorm = cartaoKey(t.cartao) || SEM_CARTAO;
-      const chave = cartaoNorm;
       const nat = effectiveNatureza(t, limites);
       if (nat === "liquida" || nat === "restrito") {
-        porCartao[chave] = (porCartao[chave] || 0) + t.valor;
-        porCartaoNatureza[chave] = nat;
+        porCartao[cartaoNorm] = (porCartao[cartaoNorm] || 0) + t.valor;
+        porCartaoNatureza[cartaoNorm] = nat;
       }
       const dateObj = t.data ? new Date(t.data) : null;
-      return { ...t, saldoCalc: running, porCartaoCalc: { ...porCartao }, porCartaoNaturezaCalc: { ...porCartaoNatureza }, dateObj, cartaoNorm };
+
+      // qualquer lançamento classificado (líquida, dívida ou restrita) conta como
+      // saída/entrada da própria conta — pago, pendente ou previsto, todos entram
+      // no saldo (é dinheiro/projeção de dinheiro, "previsto" não muda isso). Já o
+      // "utilizado" do limite de crédito é outra conta, calculada à parte em
+      // creditoPorCartao, e essa sim ignora previsto.
+      if (nat && Object.prototype.hasOwnProperty.call(contaRunning, cartaoNorm)) {
+        const conta = contasClassificadas.find((c) => c.nome === cartaoNorm);
+        if (conta && (!conta.corte || (dateObj && dateObj > conta.corte))) {
+          contaRunning[cartaoNorm] += t.valor;
+        }
+      }
+
+      // saldo reconciliado: soma, por conta, o saldo inicial (se a data já passou da
+      // corte configurada) mais os lançamentos acumulados até aqui — bate com o
+      // painel "Cartões e limites" e reage tanto a novos movimentos quanto a
+      // mudanças no saldo inicial/data de corte.
+      const saldoCalc = contasClassificadas.reduce((acc, c) => {
+        const baseAtiva = !c.corte || (dateObj && dateObj > c.corte);
+        return acc + (baseAtiva ? c.saldoInicial : 0) + (contaRunning[c.nome] || 0);
+      }, 0);
+
+      return { ...t, saldoCalc, porCartaoCalc: { ...porCartao }, porCartaoNaturezaCalc: { ...porCartaoNatureza }, dateObj, cartaoNorm };
     });
-  }, [transactions, limites]);
+  }, [transactions, limites, contasClassificadas]);
 
   const cartaoDisplayNames = useMemo(() => {
     const map = {};
@@ -672,17 +789,24 @@ function FluxoCaixa() {
       setStatus({ type: "loading", message: "Lendo planilha..." });
       try {
         const buf = await file.arrayBuffer();
-        const { transactions: imported, sheetName: sn } = parseWorkbook(buf);
+        const { transactions: imported, sheetName: sn, limites: importedLimites } = parseWorkbook(buf);
         setTransactions(imported);
         setSheetName(sn);
         setDefaultsSet(false);
         await persist(imported, sn);
-        setStatus({ type: "success", message: `${imported.length} lançamentos importados da aba "${sn}".` });
+        let msg = `${imported.length} lançamentos importados da aba "${sn}".`;
+        if (importedLimites && Object.keys(importedLimites).length > 0) {
+          const mergedLimites = { ...limites, ...importedLimites };
+          setLimites(mergedLimites);
+          await persistLimites(mergedLimites);
+          msg += ` Configuração de ${Object.keys(importedLimites).length} cartão(ões)/conta(s) restaurada da aba "${CARTOES_SHEET_NAME}".`;
+        }
+        setStatus({ type: "success", message: msg });
       } catch (e) {
         setStatus({ type: "error", message: e.message || "Não consegui ler esse arquivo." });
       }
     },
-    [persist]
+    [persist, limites, persistLimites]
   );
 
   function applyDateFilter() {
@@ -781,10 +905,31 @@ function FluxoCaixa() {
       else saidas += Math.abs(t.valor);
     });
     const ordered = [...periodFiltered].sort((a, b) => (a.dateObj?.getTime() || 0) - (b.dateObj?.getTime() || 0));
-    const saldoInicial = ordered.length > 0 ? ordered[0].saldoCalc - ordered[0].valor : null;
+    // saldo inicial do período: pega o saldo reconciliado do último lançamento do
+    // livro inteiro anterior ao início do filtro (não apenas "saldoCalc - valor" do
+    // primeiro lançamento filtrado, que só funcionava quando esse lançamento contava
+    // pro saldo — uma compra no cartão, por exemplo, não altera o saldo em dinheiro).
+    let saldoInicial = null;
+    if (ordered.length > 0) {
+      const dateFromObj = dateFrom ? new Date(dateFrom + "T00:00:00") : null;
+      if (dateFromObj) {
+        let anterior = null;
+        for (let i = ledger.length - 1; i >= 0; i--) {
+          if (ledger[i].dateObj && ledger[i].dateObj < dateFromObj) {
+            anterior = ledger[i];
+            break;
+          }
+        }
+        saldoInicial = anterior
+          ? anterior.saldoCalc
+          : contasClassificadas.reduce((acc, c) => acc + (!c.corte || dateFromObj > c.corte ? c.saldoInicial : 0), 0);
+      } else {
+        saldoInicial = 0;
+      }
+    }
     const saldoFinal = ordered.length > 0 ? ordered[ordered.length - 1].saldoCalc : null;
     return { entradas, saidas, liquido: entradas - saidas, saldoInicial, saldoFinal };
-  }, [periodFiltered]);
+  }, [periodFiltered, ledger, dateFrom, contasClassificadas]);
 
   const nomesComNatureza = useMemo(() => {
     const divida = new Set();
@@ -822,27 +967,30 @@ function FluxoCaixa() {
     });
   }, [ledger, limites, nomesComNatureza]);
 
-  const contasLiquidas = useMemo(() => {
-    const nomes = Array.from(nomesComNatureza.liquida).sort();
+  // Saldo (projetado) de cada conta classificada, incluindo dívida: uma parcela de
+  // dívida marcada como "Pago" sai do caixa da própria conta (pode até deixar o saldo
+  // negativo, até você ajustar via transferência de outra conta), e pendentes/previstos
+  // também entram na soma — saldo financeiro é diferente de limite de crédito: aqui
+  // TODO movimento conta, pago, pendente ou previsto. "Previsto" só fica de fora do
+  // "utilizado" do limite de crédito (calculado em creditoPorCartao). Contas de
+  // natureza "restrita" (e que não também têm uso líquido/dívida) ficam de fora do
+  // total "disponível", igual antes.
+  const contasComSaldo = useMemo(() => {
+    const ateLimite = dateTo ? new Date(dateTo + "T23:59:59") : null;
+    const nomes = Array.from(new Set([...nomesComNatureza.liquida, ...nomesComNatureza.divida, ...nomesComNatureza.restrito])).sort();
     return nomes.map((nome) => {
       const corte = limites[nome]?.dataCorte ? new Date(limites[nome].dataCorte + "T23:59:59") : null;
       const soma = ledger
-        .filter((t) => t.cartaoNorm === nome && effectiveNatureza(t, limites) === "liquida" && isPago(t.statusPgto) && (!corte || (t.dateObj && t.dateObj > corte)))
+        .filter((t) => t.cartaoNorm === nome && (!corte || (t.dateObj && t.dateObj > corte)) && (!ateLimite || (t.dateObj && t.dateObj <= ateLimite)))
         .reduce((acc, t) => acc + t.valor, 0);
-      return { nome, saldo: (limites[nome]?.saldoInicial || 0) + soma };
+      const saldo = (limites[nome]?.saldoInicial || 0) + soma;
+      const somenteRestrita = nomesComNatureza.restrito.has(nome) && !nomesComNatureza.liquida.has(nome) && !nomesComNatureza.divida.has(nome);
+      return { nome, saldo, somenteRestrita };
     }).sort((a, b) => b.saldo - a.saldo);
-  }, [ledger, limites, nomesComNatureza]);
+  }, [ledger, limites, nomesComNatureza, dateTo]);
 
-  const contasRestritas = useMemo(() => {
-    const nomes = Array.from(nomesComNatureza.restrito).sort();
-    return nomes.map((nome) => {
-      const corte = limites[nome]?.dataCorte ? new Date(limites[nome].dataCorte + "T23:59:59") : null;
-      const soma = ledger
-        .filter((t) => t.cartaoNorm === nome && effectiveNatureza(t, limites) === "restrito" && isPago(t.statusPgto) && (!corte || (t.dateObj && t.dateObj > corte)))
-        .reduce((acc, t) => acc + t.valor, 0);
-      return { nome, saldo: (limites[nome]?.saldoInicial || 0) + soma };
-    }).sort((a, b) => b.saldo - a.saldo);
-  }, [ledger, limites, nomesComNatureza]);
+  const contasLiquidas = useMemo(() => contasComSaldo.filter((c) => !c.somenteRestrita), [contasComSaldo]);
+  const contasRestritas = useMemo(() => contasComSaldo.filter((c) => c.somenteRestrita), [contasComSaldo]);
 
   const totalLiquido = contasLiquidas.reduce((acc, c) => acc + c.saldo, 0);
   const totalRestrito = contasRestritas.reduce((acc, c) => acc + c.saldo, 0);
@@ -1182,7 +1330,7 @@ function FluxoCaixa() {
   }
 
   function handleExportAll() {
-    const wb = buildExportWorkbook(ledger, limites);
+    const wb = buildExportWorkbook(ledger, limites, cartaoDisplayNames);
     downloadWorkbook(wb, "fluxo-caixa-completo.xlsx");
   }
 
@@ -1192,7 +1340,7 @@ function FluxoCaixa() {
       setStatus({ type: "info", message: "Não há lançamentos novos para exportar ainda." });
       return;
     }
-    const wb = buildExportWorkbook(novos, limites);
+    const wb = buildExportWorkbook(novos, limites, cartaoDisplayNames);
     downloadWorkbook(wb, "fluxo-caixa-novos-lancamentos.xlsx");
   }
 

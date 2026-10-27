@@ -35,13 +35,15 @@ A partir da versão 22, se a planilha tiver uma segunda aba com "cart" no nome (
 
 ## Tipos de lançamento
 
-O botão **Novo lançamento** oferece cinco modalidades:
+O botão **Novo lançamento** oferece cinco modalidades, todas com o mesmo conjunto de campos padrão — fonte, previsto e titularidade — além dos campos próprios de cada uma. A diferença entre elas é só onde a natureza e o status de pagamento são fixos por definição do tipo, versus livres pra editar:
 
-1. **Pagamento ou recebimento simples** — um único lançamento, entrada ou saída.
-2. **Transferência entre minhas contas** — gera automaticamente duas pontas (saída na origem, entrada no destino).
-3. **Compra no cartão** (à vista ou parcelada) — gera uma parcela por mês a partir da data do 1º vencimento; o valor total é dividido entre as parcelas (o arredondamento de centavos é absorvido na última). Sempre classificada como Dívida.
-4. **Empréstimo** (ativo — você empresta — ou passivo — você toma emprestado) — gera uma saída/entrada do valor líquido na data do líquido, mais parcelas de recebimento/pagamento a partir do 1º vencimento.
-5. **Pagamento/recebimento recorrente** — mesma descrição e valor repetidos mensal ou quinzenalmente (ex.: salário, aluguel), sem numeração de parcela.
+1. **Pagamento ou recebimento simples** — um único lançamento, entrada ou saída; natureza opcional (herda do cartão se vazio); status de pagamento editável.
+2. **Transferência entre minhas contas** — gera automaticamente duas pontas (saída na origem, entrada no destino); natureza sempre "Conta líquida" (é a definição do tipo); status de pagamento editável (aplicado às duas pontas).
+3. **Compra no cartão** (à vista ou parcelada) — gera uma parcela por mês a partir da data do 1º vencimento; o valor total é dividido entre as parcelas (o arredondamento de centavos é absorvido na última). Sempre classificada como Dívida. Status de pagamento calculado por parcela (ver abaixo).
+4. **Empréstimo** (ativo — você empresta — ou passivo — você toma emprestado) — gera uma saída/entrada do valor líquido na data do líquido, mais parcelas de recebimento/pagamento a partir do 1º vencimento. Sempre classificado como Conta líquida. Status de pagamento calculado por parcela (ver abaixo).
+5. **Pagamento/recebimento recorrente** — mesma descrição e valor repetidos mensal ou quinzenalmente (ex.: salário, aluguel), sem numeração de parcela. Status de pagamento calculado por ocorrência (ver abaixo).
+
+Nos tipos 3, 4 e 5 (que geram várias parcelas/ocorrências de uma vez), o status de pagamento de cada uma é calculado pela data: "Pago" se a data já passou, "Pendente" se não. Marcar o lançamento como **previsto** força todas as parcelas/ocorrências geradas a nascerem como pendentes, já que um lançamento previsto é, por definição, algo ainda não efetivado.
 
 ## O modelo de "natureza" e "titularidade"
 
@@ -86,6 +88,7 @@ Alterna entre duas visões:
 
 - **Exportar tudo** — gera um `.xlsx` com todos os lançamentos (importados + novos), incluindo a natureza e titularidade já resolvidas (herdadas do cartão quando aplicável), mais uma aba "Cartões e limites" com a configuração de cada conta.
 - **Exportar só novos** — só os lançamentos criados dentro do app, prontos pra colar no final da planilha original (as colunas calculadas por fórmula, como Saldo corrido, o próprio Excel recalcula ao colar dentro de uma Tabela estruturada) — também inclui a aba "Cartões e limites".
+- **Exportar filtrados** — só os lançamentos que estão passando pelos filtros ativos no momento (período, status, fonte, previsto, cartão, titularidade, natureza e busca por texto) — mesmo formato das outras exportações. O nome do arquivo já leva o período filtrado quando "de"/"até" estão preenchidos. Fica desabilitado quando o filtro atual não retorna nenhum lançamento.
 
 **Atenção**: reimportar um arquivo exportado grava a natureza como valor fixo em cada linha (não mais "herdado do cartão"). Se depois você mudar a classificação padrão de um cartão, essas linhas reimportadas não seguem a mudança automaticamente.
 
@@ -101,6 +104,10 @@ Alterna entre duas visões:
 React 18 + Recharts (gráficos) + SheetJS/xlsx (leitura e escrita de planilhas), tudo carregado via CDN e transpilado no próprio navegador com Babel Standalone — não requer instalação, Node.js ou build step.
 
 ## Changelog
+
+**v28** — Novo botão "Exportar filtrados": gera um `.xlsx` só com os lançamentos que passam pelos filtros ativos no momento (período, status, fonte, previsto, cartão, titularidade, natureza, busca por texto), no mesmo formato das outras exportações.
+
+**v27** — Todos os tipos de lançamento passaram a ter o mesmo conjunto de campos padrão do "Pagamento ou recebimento simples" (fonte, previsto, titularidade). Transferência ganhou status de pagamento editável, fonte, titularidade e previsto; Compra no cartão ganhou fonte e previsto; Empréstimo ganhou titularidade e previsto; Recorrente ganhou titularidade e previsto. Nos tipos com várias parcelas/ocorrências geradas de uma vez, marcar "previsto" agora força todas elas a nascerem como pendentes.
 
 **v26** — "Previsto" agora também conta no saldo. Saldo financeiro e limite de crédito são coisas diferentes: saldo é toda entrada/saída (pago, pendente ou previsto), sem exceção; só o "utilizado" do limite de crédito continua ignorando lançamentos "Previsto".
 

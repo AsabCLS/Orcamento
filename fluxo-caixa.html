@@ -1143,12 +1143,14 @@ function FluxoCaixa() {
         {
           id: `${groupId}-saida`, data: dataIso, dataCompra: dataIso,
           descricao: `${desc} (para ${form.contaDestino.trim()})`, valor: -magnitude, cartao: form.contaOrigem.trim(),
-          entradaSaida: "S", statusPgto: "Pago", fonte: "", previsto: false, origem: "novo", grupoId: groupId, natureza: "liquida",
+          entradaSaida: "S", statusPgto: form.statusPgto, fonte: form.fonte.trim(), previsto: form.previsto, origem: "novo", grupoId: groupId, natureza: "liquida",
+          titularidade: form.titularidade || "propria",
         },
         {
           id: `${groupId}-entrada`, data: dataIso, dataCompra: dataIso,
           descricao: `${desc} (de ${form.contaOrigem.trim()})`, valor: magnitude, cartao: form.contaDestino.trim(),
-          entradaSaida: "E", statusPgto: "Pago", fonte: "", previsto: false, origem: "novo", grupoId: groupId, natureza: "liquida",
+          entradaSaida: "E", statusPgto: form.statusPgto, fonte: form.fonte.trim(), previsto: form.previsto, origem: "novo", grupoId: groupId, natureza: "liquida",
+          titularidade: form.titularidade || "propria",
         },
       ];
     } else if (form.formTipo === "compra") {
@@ -1172,9 +1174,9 @@ function FluxoCaixa() {
           valor: -Math.abs(valorItem),
           cartao: form.cartao.trim(),
           entradaSaida: "S",
-          statusPgto: d <= hoje ? "Pago" : "-",
-          fonte: "",
-          previsto: false,
+          statusPgto: form.previsto ? "-" : (d <= hoje ? "Pago" : "-"),
+          fonte: form.fonte.trim(),
+          previsto: form.previsto,
           origem: "novo",
           grupoId: groupId,
           natureza: "divida",
@@ -1202,12 +1204,13 @@ function FluxoCaixa() {
         valor: ativo ? -valorLiquido : valorLiquido,
         cartao: form.cartao.trim(),
         entradaSaida: ativo ? "S" : "E",
-        statusPgto: dataLiquidoObj <= hoje ? "Pago" : "-",
+        statusPgto: form.previsto ? "-" : (dataLiquidoObj <= hoje ? "Pago" : "-"),
         fonte: form.fonte.trim(),
-        previsto: false,
+        previsto: form.previsto,
         origem: "novo",
         grupoId: groupId,
         natureza: "liquida",
+        titularidade: form.titularidade || "propria",
       };
 
       const parcelasLegs = Array.from({ length: parcelas }, (_, i) => {
@@ -1222,12 +1225,13 @@ function FluxoCaixa() {
           valor: ativo ? valorItem : -valorItem,
           cartao: form.cartao.trim(),
           entradaSaida: ativo ? "E" : "S",
-          statusPgto: d <= hoje ? "Pago" : "-",
+          statusPgto: form.previsto ? "-" : (d <= hoje ? "Pago" : "-"),
           fonte: form.fonte.trim(),
-          previsto: false,
+          previsto: form.previsto,
           origem: "novo",
           grupoId: groupId,
           natureza: "liquida",
+          titularidade: form.titularidade || "propria",
         };
       });
 
@@ -1250,13 +1254,13 @@ function FluxoCaixa() {
           valor: signedValor,
           cartao: form.cartao.trim(),
           entradaSaida: form.tipo,
-          statusPgto: d <= hoje ? "Pago" : "-",
+          statusPgto: form.previsto ? "-" : (d <= hoje ? "Pago" : "-"),
           fonte: form.fonte.trim(),
-          previsto: false,
+          previsto: form.previsto,
           origem: "novo",
           grupoId: groupId,
           natureza: form.natureza || null,
-          titularidade: "propria",
+          titularidade: form.titularidade || "propria",
         };
       });
     }
@@ -1342,6 +1346,16 @@ function FluxoCaixa() {
     }
     const wb = buildExportWorkbook(novos, limites, cartaoDisplayNames);
     downloadWorkbook(wb, "fluxo-caixa-novos-lancamentos.xlsx");
+  }
+
+  function handleExportFiltrados() {
+    if (tableRows.length === 0) {
+      setStatus({ type: "info", message: "Não há lançamentos no filtro atual para exportar." });
+      return;
+    }
+    const wb = buildExportWorkbook(tableRows, limites, cartaoDisplayNames);
+    const sufixoPeriodo = dateFrom || dateTo ? `-${dateFrom || "inicio"}_a_${dateTo || "fim"}` : "";
+    downloadWorkbook(wb, `fluxo-caixa-filtrado${sufixoPeriodo}.xlsx`);
   }
 
   function updateCreditoTotal(nome, valor) {
@@ -1502,6 +1516,7 @@ function FluxoCaixa() {
               <span style={{ marginLeft: "6px" }}>Exportar tudo</span>
             </button>
             <button className="fc-btn" onClick={handleExportNovos}>Exportar só novos</button>
+            <button className="fc-btn" onClick={handleExportFiltrados} disabled={tableRows.length === 0}>Exportar filtrados</button>
           </div>
         </div>
 
@@ -1765,6 +1780,30 @@ function FluxoCaixa() {
                   <label style={labelStyle}>conta de destino</label>
                   <input list="cartoes-conhecidos" style={inputStyle} value={form.contaDestino} onChange={(e) => setForm({ ...form, contaDestino: e.target.value })} />
                 </div>
+                <div>
+                  <label style={labelStyle}>status pgto</label>
+                  <select style={inputStyle} value={form.statusPgto} onChange={(e) => setForm({ ...form, statusPgto: e.target.value })}>
+                    <option value="Pago">Pago</option>
+                    <option value="-">Pendente</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>fonte (opcional)</label>
+                  <input type="text" style={inputStyle} value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>titularidade</label>
+                  <select style={inputStyle} value={form.titularidade} onChange={(e) => setForm({ ...form, titularidade: e.target.value })}>
+                    <option value="propria">Própria</option>
+                    <option value="terceiro">De terceiro</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.previsto} onChange={(e) => setForm({ ...form, previsto: e.target.checked })} />
+                    previsto (ainda não efetivado)
+                  </label>
+                </div>
               </div>
             )}
 
@@ -1810,6 +1849,16 @@ function FluxoCaixa() {
                     <option value="terceiro">De terceiro</option>
                   </select>
                 </div>
+                <div>
+                  <label style={labelStyle}>fonte (opcional)</label>
+                  <input type="text" style={inputStyle} value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value })} />
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.previsto} onChange={(e) => setForm({ ...form, previsto: e.target.checked })} />
+                    previsto (ainda não efetivado)
+                  </label>
+                </div>
               </div>
             )}
 
@@ -1853,6 +1902,19 @@ function FluxoCaixa() {
                 <div>
                   <label style={labelStyle}>fonte (opcional)</label>
                   <input type="text" style={inputStyle} placeholder="Nome da pessoa" value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value })} />
+                </div>
+                <div>
+                  <label style={labelStyle}>titularidade</label>
+                  <select style={inputStyle} value={form.titularidade} onChange={(e) => setForm({ ...form, titularidade: e.target.value })}>
+                    <option value="propria">Própria</option>
+                    <option value="terceiro">De terceiro</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.previsto} onChange={(e) => setForm({ ...form, previsto: e.target.checked })} />
+                    previsto (ainda não efetivado)
+                  </label>
                 </div>
               </div>
             )}
@@ -1905,6 +1967,19 @@ function FluxoCaixa() {
                     <option value="divida">Dívida</option>
                     <option value="restrito">Saldo restrito</option>
                   </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>titularidade</label>
+                  <select style={inputStyle} value={form.titularidade} onChange={(e) => setForm({ ...form, titularidade: e.target.value })}>
+                    <option value="propria">Própria</option>
+                    <option value="terceiro">De terceiro</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: "8px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={form.previsto} onChange={(e) => setForm({ ...form, previsto: e.target.checked })} />
+                    previsto (ainda não efetivado)
+                  </label>
                 </div>
               </div>
             )}
